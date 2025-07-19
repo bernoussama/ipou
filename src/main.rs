@@ -31,7 +31,7 @@ async fn main() -> io::Result<()> {
     config
         .tun_name(name)
         .address(address.parse::<Ipv4Addr>().unwrap())
-        .destination(Ipv4Addr::new(10, 0, 0, 1))
+        // .destination(Ipv4Addr::new(10, 0, 0, 0))
         .broadcast(Ipv4Addr::BROADCAST)
         .netmask((255, 255, 255, 0))
         .mtu(MTU as u16)
