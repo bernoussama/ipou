@@ -46,6 +46,11 @@ async fn main() -> io::Result<()> {
     let mut buf = [0u8; MTU];
     let mut udp_buf = [0u8; MTU];
 
+    peers.insert(
+        IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 68, 100, 1)), 1194),
+    );
+
     loop {
         tokio::select! {
             result = sock.recv_from(&mut udp_buf) => {
