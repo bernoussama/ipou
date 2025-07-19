@@ -1,0 +1,9 @@
+[package]
+name = "ipou"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+etherparse = "0.18.0"
+tokio = "1.46.1"
+tun-tap = "0.1.4"
