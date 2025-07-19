@@ -1,3 +1,4 @@
+use clap::Parser;
 use std::io;
 use std::{
     collections::HashMap,
@@ -5,26 +6,45 @@ use std::{
 };
 use tokio::net::UdpSocket;
 
+// Constants
+const MTU: usize = 1504;
+
+// CLI
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// Optional name to operate on
+    name: Option<String>,
+    address: Option<String>,
+    port: Option<u16>,
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    let cli = Cli::parse();
+    let name = cli.name.clone().unwrap_or("utun0".to_string());
+    let address = cli.address.unwrap_or("10.0.0.1".to_string());
+
+    let port = cli.port.unwrap_or(1194);
+
     let mut config = tun::Configuration::default();
     config
-        .tun_name("utun0")
-        .address((10, 0, 0, 1))
+        .tun_name(name)
+        .address(address.parse::<Ipv4Addr>().unwrap())
         .destination(Ipv4Addr::new(10, 0, 0, 1))
         .broadcast(Ipv4Addr::BROADCAST)
         .netmask((255, 255, 255, 0))
-        .mtu(1504)
+        .mtu(MTU as u16)
         .up();
 
     let dev = tun::create_as_async(&config)?;
-    let sock = UdpSocket::bind("0.0.0.0:1194").await?;
+    let sock = UdpSocket::bind(format!("0.0.0.0:{port}")).await?;
     println!("UDP socket bound to: {}", sock.local_addr()?);
 
     let mut peers: HashMap<IpAddr, SocketAddr> = HashMap::new();
 
-    let mut buf = [0u8; 1504];
-    let mut udp_buf = [0u8; 1504];
+    let mut buf = [0u8; MTU];
+    let mut udp_buf = [0u8; MTU];
 
     loop {
         tokio::select! {
