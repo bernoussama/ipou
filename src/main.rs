@@ -62,7 +62,10 @@ async fn main() -> io::Result<()> {
                         if let Some(src_ip) = extract_src_ip(ip_packet) {
                             peers.entry(src_ip).or_insert(peer_addr);
                         }
-                        dev.send(ip_packet).await?;
+                        match dev.send(ip_packet).await {
+                            Ok(sent) => println!("Sent {sent} bytes to TUN device"),
+                            Err(e) => eprintln!("Failed to send to TUN: {e}"),
+                        }
                     }
                 }
             }
@@ -72,8 +75,11 @@ async fn main() -> io::Result<()> {
                 // handle TUN device
                 if let Ok(len) =  result {
                     if len >= 20 {
+                        eprintln!("Available peers: {:?}", peers.keys().collect::<Vec<_>>());
                         if let Some(dst_ip) = extract_dst_ip(&buf[..len]) {
+                            println!("TUN packet: destination IP = {dst_ip}");
                             if let Some(peer_addr) = peers.get(&dst_ip) {
+                                println!("Sending to peer: {peer_addr}");
                                 sock.send_to(&buf[..len], *peer_addr).await?;
                             } else {
                                 eprintln!("No peer found for destination IP: {dst_ip}");
