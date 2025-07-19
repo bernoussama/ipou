@@ -1,105 +1,73 @@
-## Use `mio` for event-driven I/O
+This is a basic IP-over-UDP tunnel implementation with some good fundamentals, but it has several areas for improvement:
 
-Add to `Cargo.toml`:
+## Strengths
 
-```toml
-[dependencies]
-mio = "0.8"
-```
+- **Clean async architecture** using `tokio::select!` for concurrent TUN/UDP handling
+- **Proper peer discovery** by extracting source IPs from incoming UDP packets
+- **Correct IP packet parsing** for IPv4 source/destination extraction
+- **Simple routing logic** using a HashMap to map destination IPs to peer addresses
 
-Then refactor to use proper event loop:
+## Areas for improvement
 
-[file:src/main.rs](src/main.rs) line:1-70
+### 1. **Error handling**
+
+The current implementation silently drops packets on errors. Consider logging more details:
+
+[file:src/main.rs](src/main.rs) line:31-40
 
 ```rust
-use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use mio::{Events, Interest, Poll, Token};
-use mio::net::UdpSocket;
-use tun::TunPacket;
-
-const TUN_TOKEN: Token = Token(0);
-const UDP_TOKEN: Token = Token(1);
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = tun::Configuration::default();
-    config
-        .address((10, 0, 0, 1))
-        .netmask((255, 255, 255, 0))
-        .up();
-
-    #[cfg(target_os = "linux")]
-    config.platform(|config| {
-        config.packet_information(true);
-    });
-
-    let mut dev = tun::create(&config)?;
-    
-    let mut sock = UdpSocket::bind("0.0.0.0:1194".parse()?)?;
-    
-    let mut poll = Poll::new()?;
-    let mut events = Events::with_capacity(128);
-    
-    // Register TUN interface (if supported by tun crate)
-    // poll.registry().register(&mut dev, TUN_TOKEN, Interest::READABLE)?;
-    poll.registry().register(&mut sock, UDP_TOKEN, Interest::READABLE)?;
-
-    let mut peers: HashMap<IpAddr, SocketAddr> = HashMap::new();
-    let mut buf = [0u8; 1500];
-    let mut udp_buf = [0u8; 1500];
-
-    loop {
-        poll.poll(&mut events, Some(std::time::Duration::from_millis(10)))?;
-        
-        for event in events.iter() {
-            match event.token() {
-                UDP_TOKEN => {
-                    while let Ok((len, peer_addr)) = sock.recv_from(&mut udp_buf) {
-                        if len >= 20 {
-                            let ip_packet = &udp_buf[..len];
-                            if let Some(src_ip) = extract_source_ip(ip_packet) {
-                                peers.insert(src_ip, peer_addr);
-                            }
-                            dev.send(&ip_packet)?;
-                        }
-                    }
-                }
-                _ => {}
-            }
+if let Ok((len, peer_addr)) = result {
+    println!("UDP packet: {len} bytes from {peer_addr}");
+    if len >= 20 {
+        let ip_packet = &udp_buf[..len];
+        if let Some(src_ip) = extract_src_ip(ip_packet) {
+            peers.entry(src_ip).or_insert(peer_addr);
         }
-        
-        // Handle TUN interface (non-blocking)
-        while let Ok(packet) = dev.recv(&mut buf) {
-            let len = packet.get_bytes().len();
-            if len >= 20 {
-                if let Some(dst_ip) = extract_destination_ip(&buf[4..len]) {
-                    if let Some(&peer_addr) = peers.get(&dst_ip) {
-                        sock.send_to(&buf[4..len], peer_addr)?;
-                    }
-                }
-            }
-        }
+        dev.send(ip_packet).await?;
     }
-}
-
-fn extract_source_ip(packet: &[u8]) -> Option<IpAddr> {
-    if packet.len() >= 20 && packet[0] >> 4 == 4 {
-        Some(IpAddr::V4(Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15])))
-    } else {
-        None
-    }
-}
-
-fn extract_destination_ip(packet: &[u8]) -> Option<IpAddr> {
-    if packet.len() >= 20 && packet[0] >> 4 == 4 {
-        Some(IpAddr::V4(Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19])))
-    } else {
-        None
-    }
+} else {
+    eprintln!("UDP recv error: {:?}", result);
 }
 ```
 
-The `mio` approach is best for production code as it provides proper event-driven I/O without busy-waiting.
+### 2. **Packet validation**
+
+Add basic IP header validation:
+
+[file:src/main.rs](src/main.rs) line:64-73
+
+```rust
+fn extract_src_ip(packet: &[u8]) -> Option<IpAddr> {
+    if packet.len() < 20 || packet[0] >> 4 != 4 {
+        return None;
+    }
+    let header_len = (packet[0] & 0x0F) * 4;
+    if header_len < 20 || packet.len() < header_len as usize {
+        return None;
+    }
+    Some(IpAddr::V4(Ipv4Addr::new(
+        packet[12], packet[13], packet[14], packet[15],
+    )))
+}
+```
+
+### 3. **Security considerations**
+
+- No authentication/encryption - packets can be spoofed
+- No rate limiting or DoS protection
+- Consider adding a simple pre-shared key or proper crypto
+
+### 4. **Performance optimizations**
+
+- Consider using `Vec<u8>` with reusable capacity instead of fixed arrays
+- Add packet size logging for debugging
+- Consider connection timeouts for stale peers
+
+### 5. **IPv6 support**
+
+The code has TODO comments for IPv6 - implementing this would make it more complete.
+
+Overall, this is a solid foundation for learning networking concepts, but would need hardening for production use. The core tunneling logic is correct and well-structured.
 
 ## Use Tokio for async I/O
 

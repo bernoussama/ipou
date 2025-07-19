@@ -1,74 +1,86 @@
-use std::collections::HashMap;
 use std::io;
-use std::net::UdpSocket;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+};
+use tokio::net::UdpSocket;
 
-// struct Peer {
-//     private_ip: String,
-//     public_ip: String,
-// }
-//
-static MTU: usize = 1500; // Maximum Transmission Unit => 1500 + 4 for the header
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    let mut config = tun::Configuration::default();
+    config
+        .tun_name("utun0")
+        .address((10, 0, 0, 1))
+        .destination(Ipv4Addr::new(10, 0, 0, 1))
+        .broadcast(Ipv4Addr::BROADCAST)
+        .netmask((255, 255, 255, 0))
+        .mtu(1504)
+        .up();
 
-fn main() -> io::Result<()> {
-    let mut peers = HashMap::new();
-    peers.insert("10.0.0.5", "0.0.0.0:8081");
-    let vnic = tun_tap::Iface::new("tun0", tun_tap::Mode::Tun)?;
-    let mut buf = [0u8; MTU]; // MTU 
-    let sock = UdpSocket::bind("0.0.0.0:8080")?;
-    sock.set_nonblocking(true)?;
-    let mut udp_buf = [0; MTU];
+    let dev = tun::create_as_async(&config)?;
+    let sock = UdpSocket::bind("0.0.0.0:1194").await?;
+    println!("UDP socket bound to: {}", sock.local_addr()?);
+
+    let mut peers: HashMap<IpAddr, SocketAddr> = HashMap::new();
+
+    let mut buf = [0u8; 1504];
+    let mut udp_buf = [0u8; 1504];
 
     loop {
-        // if udp packet is received, send it to the vnic
-        match sock.recv_from(&mut udp_buf) {
-            Ok((len, addr)) => {
-                println!("{len:?} bytes received from {addr:?}");
+        tokio::select! {
+            result = sock.recv_from(&mut udp_buf) => {
 
-                // let len = sock.send_to(&udp_buf[..len], addr)?;
-                // println!("{len:?} bytes sent");
-                match vnic.send(&udp_buf[..len]) {
-                    Ok(_) => println!("Sent {len} bytes to vnic"),
-                    Err(e) => eprintln!("Error sending data to vnic: {e}"),
+                if let Ok((len, peer_addr)) =result {
+                    println!("UDP packet: {len} bytes from {peer_addr}");
+                    if len >= 20 {
+                        let ip_packet = &udp_buf[..len];
+                        if let Some(src_ip) = extract_src_ip(ip_packet) {
+                            peers.entry(src_ip).or_insert(peer_addr);
+                        }
+                        dev.send(ip_packet).await?;
+                    }
                 }
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                // No UDP data available, continue to check VNIC
-                match vnic.recv(&mut buf) {
-                    Ok(len) => {
-                        let flags = u16::from_be_bytes([buf[0], buf[1]]);
-                        let proto = u16::from_be_bytes([buf[2], buf[3]]);
 
-                        match etherparse::Ipv4HeaderSlice::from_slice(&buf[4..len]) {
-                            Ok(p) => {
-                                // let src_ip = p.source_addr();
-                                let dst_ip = p.destination_addr();
+            result = dev.recv(&mut buf) => {
 
-                                println!(
-                                    "Received {len} bytes. (flags: {flags:x?}, proto: {proto:x?})"
-                                );
-                                if let Some(peer_addr) = peers.get(dst_ip.to_string().as_str()) {
-                                    let len = sock.send_to(&buf[..len], peer_addr)?;
-                                    println!("{len:?} bytes sent over udp");
-                                }
+                // handle TUN device
+                if let Ok(len) =  result {
+                    if len >= 20 {
+                        if let Some(dst_ip) = extract_dst_ip(&buf[..len]) {
+                            if let Some(peer_addr) = peers.get(&dst_ip) {
+                                sock.send_to(&buf[..len], *peer_addr).await?;
+                            } else {
+                                eprintln!("No peer found for destination IP: {dst_ip}");
                             }
-                            Err(e) => {
-                                eprintln!("Error parsing IPv4 header: {e}");
-                                continue;
-                            }
+                        } else {
+                            eprintln!("Failed to extract destination IP from packet");
                         }
                     }
-                    Err(e) => {
-                        eprintln!("Error receiving data: {e}");
-                        continue;
-                    }
                 }
-            }
-            Err(e) => {
-                eprintln!("Error receiving UDP data: {e}");
-                continue;
             }
         }
     }
+}
 
-    Ok(())
+fn extract_src_ip(packet: &[u8]) -> Option<IpAddr> {
+    if packet[0] >> 4 == 4 {
+        Some(IpAddr::V4(Ipv4Addr::new(
+            packet[12], packet[13], packet[14], packet[15],
+        )))
+    } else {
+        // Handle IPv6 or other protocols if needed
+        None
+    }
+}
+
+fn extract_dst_ip(packet: &[u8]) -> Option<IpAddr> {
+    if packet[0] >> 4 == 4 {
+        Some(IpAddr::V4(Ipv4Addr::new(
+            packet[16], packet[17], packet[18], packet[19],
+        )))
+    } else {
+        // Handle IPv6 or other protocols if needed
+        None
+    }
 }
