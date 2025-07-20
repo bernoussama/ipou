@@ -137,7 +137,7 @@ async fn main() -> io::Result<()> {
     println!("UDP socket bound to: {}", sock.local_addr()?);
 
     let mut buf = [0u8; MTU];
-    let mut udp_buf = [0u8; MTU];
+    let mut udp_buf = [0u8; MTU + 512]; // 512 bytes for nonce + auth tag + data
 
     loop {
         tokio::select! {
