@@ -1,4 +1,7 @@
+use chacha20poly1305::aead::Aead;
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use clap::{Parser, Subcommand};
+use rand::RngCore;
 use std::io;
 use std::{
     collections::HashMap,
@@ -12,13 +15,15 @@ pub struct Config {
     pub name: String,
     pub address: String,
     pub port: u16,
+    pub secret: String,
+    pub pubkey: String,
     pub peers: HashMap<IpAddr, Peer>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
 pub struct Peer {
     pub sock_addr: SocketAddr,
-    pub pub_key: [u8; 32],
+    pub pub_key: String,
 }
 
 // Constants
@@ -78,55 +83,61 @@ async fn main() -> io::Result<()> {
         None => {}
     }
 
-    // Load config file
-    let config_path = "config.yaml";
-    let config: Config = match std::fs::read_to_string(config_path) {
-        Ok(content) => serde_yml::from_str(&content).unwrap(),
-        Err(_) => {
-            eprintln!("No config file found, using defaults");
-            return Ok(());
-        }
-    };
-
-    let name = cli.name.clone().unwrap_or("utun0".to_string());
-    let address = cli.address.unwrap_or("10.0.0.1".to_string());
-
-    let port = cli.port.unwrap_or(1194);
-
-    let mut config = tun::Configuration::default();
-    config
-        .tun_name(name)
-        .address(address.parse::<Ipv4Addr>().unwrap())
-        .netmask((255, 255, 255, 0))
-        .mtu(MTU as u16)
-        .up();
-
-    let dev = tun::create_as_async(&config)?;
-    let sock = UdpSocket::bind(format!("0.0.0.0:{port}")).await?;
-    println!("UDP socket bound to: {}", sock.local_addr()?);
-
-    let mut peers: HashMap<IpAddr, Peer> = HashMap::new();
-
-    let mut buf = [0u8; MTU];
-    let mut udp_buf = [0u8; MTU];
-
     let alice_secret = EphemeralSecret::random();
     let alice_public = PublicKey::from(&alice_secret);
+
+    let mut peers: HashMap<IpAddr, Peer> = HashMap::new();
 
     peers.insert(
         IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
         Peer {
             sock_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 68, 100, 1)), 1194),
-            pub_key: alice_public.to_bytes(),
+            pub_key: base64::encode(alice_public.to_bytes()),
         },
     );
     peers.insert(
         IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
         Peer {
             sock_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 68, 100, 2)), 1194),
-            pub_key: alice_public.to_bytes(),
+            pub_key: base64::encode(alice_public.to_bytes()),
         },
     );
+    // Load config file
+    let config_path = "config.yaml";
+    let conf: Config = match std::fs::read_to_string(config_path) {
+        Ok(content) => serde_yml::from_str(&content).unwrap(),
+        Err(_) => {
+            eprintln!("No config file found! using defaults.");
+            let private_key = StaticSecret::random();
+            let public_key = PublicKey::from(&private_key);
+            let conf = Config {
+                name: "utun0".to_string(),
+                address: "10.0.0.1".to_string(),
+                secret: base64::encode(private_key.to_bytes()),
+                pubkey: base64::encode(public_key.to_bytes()),
+                port: 1194,
+                peers,
+            };
+            std::fs::write(config_path, serde_yml::to_string(&conf).unwrap())
+                .expect("Failed to write default config file");
+            conf
+        }
+    };
+
+    let mut config = tun::Configuration::default();
+    config
+        .tun_name(conf.name)
+        .address(conf.address.parse::<Ipv4Addr>().unwrap())
+        .netmask((255, 255, 255, 0))
+        .mtu(MTU as u16)
+        .up();
+
+    let dev = tun::create_as_async(&config)?;
+    let sock = UdpSocket::bind(format!("0.0.0.0:{}", conf.port)).await?;
+    println!("UDP socket bound to: {}", sock.local_addr()?);
+
+    let mut buf = [0u8; MTU];
+    let mut udp_buf = [0u8; MTU];
 
     loop {
         tokio::select! {
@@ -134,15 +145,33 @@ async fn main() -> io::Result<()> {
 
                 if let Ok((len, peer_addr)) =result {
                     println!("UDP packet: {len} bytes from {peer_addr}");
-                    if len >= 20 {
-                        let ip_packet = &udp_buf[..len];
-                        if let Some(src_ip) = extract_src_ip(ip_packet) {
-                            if let Some(_peer) = peers.get(&src_ip) {
-                                match dev.send(ip_packet).await {
-                                    Ok(sent) => println!("Sent {sent} bytes to TUN device"),
-                                    Err(e) => eprintln!("Failed to send to TUN: {e}"),
+                    if len >= 32 { // 12 bytes nonce + 16 bytes auth tag + min 4 bytes data
+                        // Extract nonce and encrypted data
+                        let nonce = Nonce::from_slice(&udp_buf[..12]);
+                        let encrypted_data = &udp_buf[12..len];
+
+                        // Find peer by socket address to get shared secret
+                        if let Some((_, peer)) = conf.peers.iter().find(|(_, p)| p.sock_addr == peer_addr) {
+                            let mut secret_bytes = [0u8; 32];
+                            base64::decode_config_slice(&conf.secret, base64::STANDARD, &mut secret_bytes).unwrap();
+                            let mut pub_key_bytes = [0u8; 32];
+                            base64::decode_config_slice(&peer.pub_key, base64::STANDARD, &mut pub_key_bytes).unwrap();
+                            let shared_secret = StaticSecret::from(secret_bytes).diffie_hellman(&PublicKey::from(pub_key_bytes));
+
+                            let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
+                            match cipher.decrypt(nonce, encrypted_data) {
+                                Ok(decrypted) => {
+                                    if decrypted.len() >= 20 {
+                                        match dev.send(&decrypted).await {
+                                            Ok(sent) => println!("Sent {sent} bytes to TUN device"),
+                                            Err(e) => eprintln!("Failed to send to TUN: {e}"),
+                                        }
+                                    }
                                 }
+                                Err(e) => eprintln!("Decryption failed: {e}"),
                             }
+                        } else {
+                            eprintln!("No peer found for address: {peer_addr}");
                         }
                     }
                 }
@@ -153,12 +182,36 @@ async fn main() -> io::Result<()> {
                 // handle TUN device
                 if let Ok(len) =  result {
                     if len >= 20 {
-                        eprintln!("Available peers: {:?}", peers.keys().collect::<Vec<_>>());
+                        eprintln!("Available peers: {:?}", conf.peers.keys().collect::<Vec<_>>());
                         if let Some(dst_ip) = extract_dst_ip(&buf[..len]) {
                             println!("TUN packet: destination IP = {dst_ip}");
-                            if let Some(peer) = peers.get(&dst_ip) {
-                                println!("Sending to peer: {}", peer.sock_addr);
-                                sock.send_to(&buf[..len], peer.sock_addr).await?;
+                            if let Some(peer) = conf.peers.get(&dst_ip) {
+                                // DH shared secret
+                                let mut secret_bytes = [0u8; 32];
+                                base64::decode_config_slice(&conf.secret, base64::STANDARD, &mut secret_bytes).unwrap();
+                                let mut pub_key_bytes = [0u8; 32];
+                                base64::decode_config_slice(&peer.pub_key, base64::STANDARD, &mut pub_key_bytes).unwrap();
+                                let shared_secret = StaticSecret::from(secret_bytes).diffie_hellman(&PublicKey::from(pub_key_bytes));
+
+                                // Encrypt packet
+                                let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
+                                let mut nonce_bytes = [0u8; 12];
+                                rand::rng().fill_bytes(&mut nonce_bytes);
+                                let nonce = Nonce::from_slice(&nonce_bytes);
+
+                                match cipher.encrypt(nonce, &buf[..len]) {
+                                    Ok(encrypted) => {
+                                        // Prepend nonce to encrypted data
+                                        let mut packet = Vec::with_capacity(12 + encrypted.len());
+                                        packet.extend_from_slice(&nonce_bytes);
+                                        packet.extend_from_slice(&encrypted);
+
+                                        println!("Sending encrypted packet to peer: {}", peer.sock_addr);
+                                        sock.send_to(&packet, peer.sock_addr).await?;
+                                    }
+                                    Err(e) => eprintln!("Encryption failed: {e}"),
+                                }
+
                             } else {
                                 eprintln!("No peer found for destination IP: {dst_ip}");
                             }
