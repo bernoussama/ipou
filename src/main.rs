@@ -210,7 +210,7 @@ async fn main() -> io::Result<()> {
                     let mut buf = [0u8; MTU];
                     let recv_result = dev.recv(&mut buf).await;
                     recv_result.map(|len| (buf, len))
-                } =>{
+                } => {
                        // handle TUN device
                        if let Ok((buf,len)) =  result {
                            let utx_clone = utx.clone();
