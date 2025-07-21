@@ -8,9 +8,10 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 
-#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
 pub struct Config {
     pub name: String,
     pub address: String,
@@ -20,7 +21,7 @@ pub struct Config {
     pub peers: HashMap<IpAddr, Peer>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
 pub struct Peer {
     pub sock_addr: SocketAddr,
     pub pub_key: String,
@@ -126,7 +127,7 @@ async fn main() -> io::Result<()> {
 
     let mut config = tun::Configuration::default();
     config
-        .tun_name(conf.name)
+        .tun_name(&conf.name)
         .address(conf.address.parse::<Ipv4Addr>().unwrap())
         .netmask((255, 255, 255, 0))
         .mtu(MTU as u16)
@@ -136,59 +137,86 @@ async fn main() -> io::Result<()> {
     let sock = UdpSocket::bind(format!("0.0.0.0:{}", conf.port)).await?;
     println!("UDP socket bound to: {}", sock.local_addr()?);
 
-    let mut buf = [0u8; MTU];
-    let mut udp_buf = [0u8; MTU + 512]; // 512 bytes for nonce + auth tag + data
+    // Create channel for sending decrypted packets to TUN device
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    // Create channel for sending encrypted packets to UDP socket
+    let (utx, mut urx) = mpsc::unbounded_channel::<Vec<u8>>();
 
     loop {
+        let mut buf = [0u8; MTU];
+        let mut udp_buf = [0u8; MTU + 512]; // 512 bytes for nonce + auth tag + data
         tokio::select! {
+
             result = sock.recv_from(&mut udp_buf) => {
-
                 if let Ok((len, peer_addr)) =result {
-                    println!("UDP packet: {len} bytes from {peer_addr}");
-                    if len >= 32 { // 12 bytes nonce + 16 bytes auth tag + min 4 bytes data
-                        // Extract nonce and encrypted data
-                        let nonce = Nonce::from_slice(&udp_buf[..12]);
-                        let encrypted_data = &udp_buf[12..len];
+                    let conf_clone = conf.clone();
+                    let tx_clone = tx.clone();
+                    tokio::spawn(async move {
+                        println!("UDP packet: {len} bytes from {peer_addr}");
+                        if len >= 32 { // 12 bytes nonce + 16 bytes auth tag + min 4 bytes data
+                            // Extract nonce and encrypted data
+                            let nonce = Nonce::from_slice(&udp_buf[..12]);
+                            let encrypted_data = &udp_buf[12..len];
 
-                        // Find peer by socket address to get shared secret
-                        if let Some((_, peer)) = conf.peers.iter().find(|(_, p)| p.sock_addr == peer_addr) {
-                            let mut secret_bytes = [0u8; 32];
-                            base64::decode_config_slice(&conf.secret, base64::STANDARD, &mut secret_bytes).unwrap();
-                            let mut pub_key_bytes = [0u8; 32];
-                            base64::decode_config_slice(&peer.pub_key, base64::STANDARD, &mut pub_key_bytes).unwrap();
-                            let shared_secret = StaticSecret::from(secret_bytes).diffie_hellman(&PublicKey::from(pub_key_bytes));
+                            // Find peer by socket address to get shared secret
+                            if let Some((_, peer)) = conf_clone.peers.iter().find(|(_, p)| p.sock_addr == peer_addr) {
+                                let mut secret_bytes = [0u8; 32];
+                                base64::decode_config_slice(&conf_clone.secret, base64::STANDARD, &mut secret_bytes).unwrap();
+                                let mut pub_key_bytes = [0u8; 32];
+                                base64::decode_config_slice(&peer.pub_key, base64::STANDARD, &mut pub_key_bytes).unwrap();
+                                let shared_secret = StaticSecret::from(secret_bytes).diffie_hellman(&PublicKey::from(pub_key_bytes));
 
-                            let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
-                            match cipher.decrypt(nonce, encrypted_data) {
-                                Ok(decrypted) => {
-                                    if decrypted.len() >= 20 {
-                                        match dev.send(&decrypted).await {
-                                            Ok(sent) => println!("Sent {sent} bytes to TUN device"),
-                                            Err(e) => eprintln!("Failed to send to TUN: {e}"),
+                                let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
+                                match cipher.decrypt(nonce, encrypted_data) {
+                                    Ok(decrypted) => {
+                                        if decrypted.len() >= 20 {
+                                            if let Err(e) = tx_clone.send(decrypted) {
+                                                eprintln!("Failed to send to channel: {e}");
+                                            }
                                         }
                                     }
+                                    Err(e) => eprintln!("Decryption failed: {e}"),
                                 }
-                                Err(e) => eprintln!("Decryption failed: {e}"),
+                            } else {
+                                eprintln!("No peer found for address: {peer_addr}");
                             }
-                        } else {
-                            eprintln!("No peer found for address: {peer_addr}");
                         }
-                    }
+                    });
                 }
+
             }
+
+        // Receive decrypted packets from channel and send to TUN
+        Some(decrypted_packet) = rx.recv() => {
+            match dev.send(&decrypted_packet).await {
+                Ok(sent) => println!("Sent {sent} bytes to TUN device"),
+                Err(e) => eprintln!("Failed to send to TUN: {e}"),
+            }
+        }
+
+        // Receive decrypted packets from channel and send to TUN
+        Some(encrypted_packet) = urx.recv() => {
+            match dev.send(&encrypted_packet).await {
+                Ok(sent) => println!("Sent {sent} bytes to TUN device"),
+                Err(e) => eprintln!("Failed to send to TUN: {e}"),
+            }
+        }
 
             result = dev.recv(&mut buf) => {
 
                 // handle TUN device
                 if let Ok(len) =  result {
+                    let utx_clone = utx.clone();
+                    let conf_clone = conf.clone();
+                    tokio::spawn(async move {
                     if len >= 20 {
-                        eprintln!("Available peers: {:?}", conf.peers.keys().collect::<Vec<_>>());
+                        eprintln!("Available peers: {:?}", conf_clone.peers.keys().collect::<Vec<_>>());
                         if let Some(dst_ip) = extract_dst_ip(&buf[..len]) {
                             println!("TUN packet: destination IP = {dst_ip}");
-                            if let Some(peer) = conf.peers.get(&dst_ip) {
+                            if let Some(peer) = conf_clone.peers.get(&dst_ip) {
                                 // DH shared secret
                                 let mut secret_bytes = [0u8; 32];
-                                base64::decode_config_slice(&conf.secret, base64::STANDARD, &mut secret_bytes).unwrap();
+                                base64::decode_config_slice(&conf_clone.secret, base64::STANDARD, &mut secret_bytes).unwrap();
                                 let mut pub_key_bytes = [0u8; 32];
                                 base64::decode_config_slice(&peer.pub_key, base64::STANDARD, &mut pub_key_bytes).unwrap();
                                 let shared_secret = StaticSecret::from(secret_bytes).diffie_hellman(&PublicKey::from(pub_key_bytes));
@@ -207,7 +235,10 @@ async fn main() -> io::Result<()> {
                                         packet.extend_from_slice(&encrypted);
 
                                         println!("Sending encrypted packet to peer: {}", peer.sock_addr);
-                                        sock.send_to(&packet, peer.sock_addr).await?;
+
+                                        if let Err(e) = utx_clone.send(packet) {
+                                            eprintln!("Failed to send to channel: {e}");
+                                        }
                                     }
                                     Err(e) => eprintln!("Encryption failed: {e}"),
                                 }
@@ -219,6 +250,7 @@ async fn main() -> io::Result<()> {
                             eprintln!("Failed to extract destination IP from packet");
                         }
                     }
+                    });
                 }
             }
         }
