@@ -140,11 +140,11 @@ async fn main() -> io::Result<()> {
     // Create channel for sending decrypted packets to TUN device
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     // Create channel for sending encrypted packets to UDP socket
-    let (utx, mut urx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (utx, mut urx) = mpsc::unbounded_channel::<(Vec<u8>, SocketAddr)>();
 
+    let mut buf = [0u8; MTU];
+    let mut udp_buf = [0u8; MTU + 512]; // 512 bytes for nonce + auth tag + data
     loop {
-        let mut buf = [0u8; MTU];
-        let mut udp_buf = [0u8; MTU + 512]; // 512 bytes for nonce + auth tag + data
         tokio::select! {
 
             result = sock.recv_from(&mut udp_buf) => {
@@ -195,10 +195,10 @@ async fn main() -> io::Result<()> {
         }
 
         // Receive decrypted packets from channel and send to TUN
-        Some(encrypted_packet) = urx.recv() => {
-            match dev.send(&encrypted_packet).await {
-                Ok(sent) => println!("Sent {sent} bytes to TUN device"),
-                Err(e) => eprintln!("Failed to send to TUN: {e}"),
+        Some((encrypted_packet, peer_addr)) = urx.recv() => {
+            match sock.send_to(&encrypted_packet, peer_addr).await {
+                Ok(sent) => println!("Sent {sent} bytes to UDP socket"),
+                Err(e) => eprintln!("Failed to send to UDP: {e}"),
             }
         }
 
@@ -236,7 +236,7 @@ async fn main() -> io::Result<()> {
 
                                         println!("Sending encrypted packet to peer: {}", peer.sock_addr);
 
-                                        if let Err(e) = utx_clone.send(packet) {
+                                        if let Err(e) = utx_clone.send((packet, peer.sock_addr)) {
                                             eprintln!("Failed to send to channel: {e}");
                                         }
                                     }
