@@ -1,18 +1,21 @@
 # ipou - IP over UDP
 
-A simple, high-performance IP-over-UDP tunnel implementation written in Rust using async I/O.
+A secure, high-performance IP-over-UDP tunnel implementation written in Rust using async I/O and modern cryptography.
 
 ## Overview
 
-**ipou** creates a TUN interface that tunnels IP packets over UDP, enabling secure communication between peers across networks. It uses Tokio for efficient async networking and supports automatic peer discovery.
+**ipou** creates a TUN interface that tunnels IP packets over UDP with ChaCha20-Poly1305 encryption. It enables secure communication between peers across networks using Curve25519 key exchange and YAML-based configuration.
 
 ## Features
 
 - ✅ **IP-over-UDP tunneling** - Encapsulate IP packets in UDP for transport
 - ✅ **Async I/O** - Built with Tokio for high performance
-- ✅ **Automatic peer discovery** - Learns peer addresses from incoming packets
+- ✅ **ChaCha20-Poly1305 encryption** - Modern authenticated encryption
+- ✅ **Curve25519 key exchange** - Elliptic curve Diffie-Hellman key agreement
+- ✅ **YAML configuration** - Persistent peer and key management
+- ✅ **Key generation tools** - Built-in cryptographic key utilities
 - ✅ **IPv4 support** - Full IPv4 packet routing
-- ⏳ **Planned**: Encryption, authentication, IPv6 support
+- ⏳ **Planned**: IPv6 support, rate limiting, improved error handling
 
 ## Quick Start
 
@@ -30,14 +33,42 @@ cd ipou
 cargo build --release
 ```
 
+### Key Generation
+
+Generate cryptographic keys for secure communication:
+
+```bash
+# Generate a private key
+./target/release/ipou genkey
+
+# Generate public key from private key
+./target/release/ipou pubkey
+```
+
+### Configuration
+
+Create a `config.yaml` file or let ipou generate a default one:
+
+```yaml
+name: "utun0"
+address: "10.0.0.1"
+port: 1194
+secret: "base64-encoded-private-key"
+pubkey: "base64-encoded-public-key"
+peers:
+  10.0.0.2:
+    sock_addr: "192.168.1.100:1194"
+    pub_key: "peer-base64-public-key"
+```
+
 ### Basic Usage
 
 ```bash
-# Run with default settings (interface: utun0, address: 10.0.0.1, port: 1194)
+# Run with configuration file (recommended)
 sudo ./target/release/ipou
 
-# Custom configuration
-sudo ./target/release/ipou tun1 10.0.1.1 8080
+# CLI arguments (legacy support)
+sudo ./target/release/ipou [NAME] [ADDRESS] [PORT]
 ```
 
 ### Using the Helper Script
@@ -51,12 +82,16 @@ chmod +x run.sh
 ## Command Line Options
 
 ```
-Usage: ipou [NAME] [ADDRESS] [PORT]
+Usage: ipou [OPTIONS] [NAME] [ADDRESS] [PORT]
 
 Arguments:
-  [NAME]     TUN interface name (default: utun0)
-  [ADDRESS]  Local IP address (default: 10.0.0.1)
-  [PORT]     UDP port to bind (default: 1194)
+  [NAME]     TUN interface name (default: from config)
+  [ADDRESS]  Local IP address (default: from config) 
+  [PORT]     UDP port to bind (default: from config)
+
+Commands:
+  genkey     Generate a new private key
+  pubkey     Generate public key from private key
 
 Options:
   -h, --help     Print help
@@ -66,17 +101,76 @@ Options:
 ## How It Works
 
 1. **TUN Interface**: Creates a virtual network interface that captures IP packets
-2. **UDP Transport**: Encapsulates captured packets in UDP for network transmission  
-3. **Peer Discovery**: Automatically learns peer addresses from incoming UDP packets
-4. **Bidirectional Routing**: Routes packets between TUN interface and UDP peers
+2. **Encryption**: Each packet is encrypted with ChaCha20-Poly1305 using shared secrets
+3. **Key Exchange**: Curve25519 Diffie-Hellman establishes shared secrets between peers
+4. **UDP Transport**: Encrypted packets are transmitted over UDP with random nonces
+5. **Configuration**: Peers are defined in YAML with their public keys and addresses
 
 ```
-┌─────────────┐    UDP    ┌─────────────┐
-│   Client A  │◄─────────►│   Client B  │
-│             │           │             │
-│ TUN: tun0   │           │ TUN: tun0   │
-│ IP: 10.0.0.1│           │ IP: 10.0.0.2│
-└─────────────┘           └─────────────┘
+┌─────────────┐    Encrypted UDP    ┌─────────────┐
+│   Client A  │◄─────────────────►│   Client B  │
+│             │  ChaCha20-Poly1305  │             │
+│ TUN: tun0   │   + Curve25519      │ TUN: tun0   │
+│ IP: 10.0.0.1│                     │ IP: 10.0.0.2│
+└─────────────┘                     └─────────────┘
+```
+
+## Packet Flow Diagram
+
+```
+Peer A (10.0.0.1)                                    Peer B (10.0.0.2)
+┌─────────────────┐                                   ┌─────────────────┐
+│  Application    │                                   │  Application    │
+└─────────┬───────┘                                   └─────────┬───────┘
+          │ IP packet (10.0.0.1 → 10.0.0.2)                     │
+          ▼                                                     ▼
+┌─────────────────┐                                   ┌─────────────────┐
+│   TUN Device    │                                   │   TUN Device    │
+│    (utun0)      │                                   │    (utun0)      │
+└─────────┬───────┘                                   └─────────┬───────┘
+          │                                                     ▲
+          │ 1. Read IP packet                                   │ 6. Write decrypted
+          ▼                                                     │    IP packet
+┌─────────────────┐                                   ┌─────────────────┐
+│  ipou Process   │                                   │  ipou Process   │
+│                 │                                   │                 │
+│ ┌─────────────┐ │                                   │ ┌─────────────┐ │
+│ │ Extract     │ │                                   │ │ Decrypt     │ │
+│ │ dst IP      │ │                                   │ │ with shared │ │
+│ └─────────────┘ │                                   │ │ secret      │ │
+│ ┌─────────────┐ │                                   │ └─────────────┘ │
+│ │ Lookup peer │ │                                   │ ┌─────────────┐ │
+│ │ config      │ │                                   │ │ Verify      │ │
+│ └─────────────┘ │                                   │ │ nonce +     │ │
+│ ┌─────────────┐ │                                   │ │ auth tag    │ │
+│ │ Generate    │ │                                   │ └─────────────┘ │
+│ │ random      │ │                                   │                 │
+│ │ nonce       │ │                                   │                 │
+│ └─────────────┘ │                                   │                 │
+│ ┌─────────────┐ │                                   │                 │
+│ │ Encrypt     │ │                                   │                 │
+│ │ with shared │ │                                   │                 │
+│ │ secret      │ │                                   │                 │
+│ └─────────────┘ │                                   │                 │
+└─────────┬───────┘                                   └─────────┬───────┘
+          │                                                     ▲
+          │ 2. Send encrypted                                   │ 5. Receive encrypted
+          │    packet over UDP                                  │    packet from UDP
+          ▼                                                     │
+┌─────────────────┐                                   ┌─────────────────┐
+│   UDP Socket    │                                   │   UDP Socket    │
+│ (port 1194)     │                                   │ (port 1194)     │
+└─────────┬───────┘                                   └─────────┬───────┘
+          │                                                     ▲
+          │ 3. Network transmission                             │
+          │    [nonce(12) + encrypted_data + auth_tag(16)]      │
+          └─────────────────────────────────────────────────────┘
+                           4. Internet/LAN
+
+Legend:
+- Shared Secret = ECDH(local_private_key, peer_public_key)
+- Encryption = ChaCha20-Poly1305(shared_secret, nonce, ip_packet)
+- Packet Format = nonce || encrypted_data_with_auth_tag
 ```
 
 ## Configuration Examples
@@ -85,17 +179,40 @@ Options:
 
 **Node A:**
 
+1. Generate keys:
+
 ```bash
-sudo ./target/release/ipou utun0 10.0.0.1 1194
+# Generate private key
+PRIVATE_A=$(./target/release/ipou genkey)
+# Generate public key  
+PUBLIC_A=$(echo "$PRIVATE_A" | ./target/release/ipou pubkey)
+```
+
+2. Create config.yaml:
+
+```yaml
+name: "utun0"
+address: "10.0.0.1"
+port: 1194
+secret: "$PRIVATE_A"
+pubkey: "$PUBLIC_A" 
+peers:
+  10.0.0.2:
+    sock_addr: "192.168.1.100:1194"
+    pub_key: "$PUBLIC_B"  # Get from Node B
+```
+
+3. Run:
+
+```bash
+sudo ./target/release/ipou
 ```
 
 **Node B:**
 
-```bash
-sudo ./target/release/ipou utun0 10.0.0.2 1194
-# Send a packet to Node A to establish the tunnel
-ping 10.0.0.1
-```
+1. Generate keys and create similar config with reversed IPs
+2. Exchange public keys securely with Node A
+3. Run the tunnel
 
 ### Network Configuration
 
@@ -112,8 +229,10 @@ sudo ip link set up dev utun0
 ## Architecture
 
 - **Async Design**: Uses `tokio::select!` for concurrent TUN/UDP handling
+- **Encryption**: ChaCha20-Poly1305 authenticated encryption with random nonces
+- **Key Exchange**: Curve25519 elliptic curve Diffie-Hellman key agreement
+- **Configuration**: YAML-based peer management with persistent keys
 - **Zero-Copy**: Efficient packet forwarding with minimal allocations
-- **Peer Table**: HashMap-based routing table for destination lookup
 - **Error Resilience**: Continues operation despite individual packet errors
 
 ## Development Status
@@ -122,8 +241,8 @@ This project is in active development. See [PRD.md](PRD.md) for the roadmap.
 
 ### Current Limitations
 
-- No encryption or authentication
 - IPv4 only
+- Static peer configuration (no dynamic discovery)
 - Basic error handling
 - No rate limiting or DoS protection
 
@@ -133,5 +252,4 @@ This project is in active development. See [PRD.md](PRD.md) for the roadmap.
 
 ## Security Notice
 
-⚠️ **This software is currently unencrypted and unauthenticated.** Do not use in production environments without additional security measures.
-
+✅ **This software uses ChaCha20-Poly1305 encryption with Curve25519 key exchange for secure communication.** While cryptographically secure, ensure proper key management and consider additional security measures for production environments.
