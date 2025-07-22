@@ -37,6 +37,7 @@ struct RuntimeConfig {
 // Constants
 const MTU: usize = 1504;
 const CHANNEL_BUFFER_SIZE: usize = MTU + 512; // Buffered channels
+const ENCRYPTION_OVERHEAD: usize = 28; // 12 nonce + 16 auth tag
 
 // CLI
 #[derive(Parser)]
@@ -182,6 +183,7 @@ async fn main() -> io::Result<()> {
     // Pre-allocate buffers to avoid repeated allocations
     let mut udp_buf = [0u8; MTU + 512];
     let mut buf = [0u8; MTU];
+    let mut packet = Vec::with_capacity(MTU + ENCRYPTION_OVERHEAD);
 
     loop {
         tokio::select! {
@@ -246,6 +248,7 @@ async fn main() -> io::Result<()> {
                        // handle TUN device
                        if let Ok((buf,len)) =  result {
                            let utx_clone = utx.clone();
+                            let mut packet = packet.clone();
                            let conf_clone = Arc::clone(&config);
                             let runtime_conf = Arc::clone(&runtime_config);
                            if len >= 20 {
@@ -261,7 +264,7 @@ async fn main() -> io::Result<()> {
                                         match cipher.encrypt(nonce, &buf[..len]) {
                                             Ok(encrypted) => {
                                                 // Prepend nonce to encrypted data
-                                                let mut packet = Vec::with_capacity(12 + encrypted.len());
+                                                packet.clear();
                                                 packet.extend_from_slice(&nonce_bytes);
                                                 packet.extend_from_slice(&encrypted);
 
