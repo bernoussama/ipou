@@ -193,20 +193,23 @@ async fn main() -> io::Result<()> {
 
                                    // Find peer by socket address to get shared secret
                                    if let Some((_, peer)) = conf_clone.peers.iter().find(|(_, p)| p.sock_addr == peer_addr) {
-                                       // let shared_secret = runtime_config.shared_secrets.get(&peer.sock_addr.ip()).unwrap_or(&[0u8; 32]);
+                                       // let shared_secret = runtime_conf.shared_secrets.get(&peer.sock_addr.ip()).unwrap_or(&[0u8; 32]);
 
                                        // let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
-                                       let cipher = runtime_conf.ciphers.get(&peer.sock_addr.ip()).unwrap();
-                                       match cipher.decrypt(nonce, encrypted_data) {
-                                           Ok(decrypted) => {
-                                               if decrypted.len() >= 20 {
-                                                   if let Err(e) = tx_clone.send(decrypted) {
-                                                       eprintln!("Failed to send to channel: {e}");
-                                                   }
-                                               }
-                                           }
-                                           Err(e) => eprintln!("Decryption failed: {e}"),
-                                       }
+                                       if let Some(cipher) = runtime_conf.ciphers.get(&peer.sock_addr.ip()) {
+                                        match cipher.decrypt(nonce, encrypted_data) {
+                                            Ok(decrypted) => {
+                                                if decrypted.len() >= 20 {
+                                                    if let Err(e) = tx_clone.send(decrypted) {
+                                                        eprintln!("Failed to send to channel: {e}");
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => eprintln!("Decryption failed: {e}"),
+                                        }
+                                        }else {
+                                           eprintln!("No cipher found for peer: {}", peer.sock_addr.ip());
+                                        }
                                    } else {
                                        eprintln!("No peer found for address: {peer_addr}");
                                    }
@@ -249,7 +252,10 @@ async fn main() -> io::Result<()> {
                                    println!("TUN packet: destination IP = {dst_ip}");
                                    if let Some(peer) = conf_clone.peers.get(&dst_ip) {
                                        // Encrypt packet
-                                       let cipher = runtime_conf.ciphers.get(&peer.sock_addr.ip()).unwrap();
+
+                                       if let Some(cipher) = runtime_conf.ciphers.get(&peer.sock_addr.ip()) {
+
+
                                        let mut nonce_bytes = [0u8; 12];
                                        rand::rng().fill_bytes(&mut nonce_bytes);
                                        let nonce = Nonce::from_slice(&nonce_bytes);
@@ -269,6 +275,10 @@ async fn main() -> io::Result<()> {
                                            }
                                            Err(e) => eprintln!("Encryption failed: {e}"),
                                        }
+
+                                    } else {
+                                       eprintln!("No cipher found for peer: {}", peer.sock_addr.ip());
+                                    }
 
                                    } else {
                                        eprintln!("No peer found for destination IP: {dst_ip}");
