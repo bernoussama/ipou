@@ -197,7 +197,6 @@ async fn main() -> io::Result<()> {
                             let runtime_conf = Arc::clone(&runtime_config);
                            let tx_clone = tx.clone();
                            tokio::spawn(async move {
-                               println!("UDP packet: {len} bytes from {peer_addr}");
                                if len >= 32 { // 12 bytes nonce + 16 bytes auth tag + min 4 bytes data
                                    // Extract nonce and encrypted data
                                    let nonce = Nonce::from_slice(&udp_buf[..12]);
@@ -212,16 +211,17 @@ async fn main() -> io::Result<()> {
                                             Ok(decrypted) => {
                                                 if decrypted.len() >= 20 {
                                                     if let Err(e) = tx_clone.send(decrypted) {
-                                                        eprintln!("Failed to send to channel: {e}");
                                                     }
                                                 }
                                             }
-                                            Err(e) => eprintln!("Decryption failed: {e}"),
+                                            Err(_e) => {},
                                         }
                                         }else {
+                                            #[cfg(debug_assertions)]
                                            eprintln!("No cipher found for peer: {}", ip);
                                         }
                                     } else {
+                                        #[cfg(debug_assertions)]
                                         eprintln!("No IP found for peer address: {}", peer_addr);
                                     }
                                }
@@ -232,16 +232,16 @@ async fn main() -> io::Result<()> {
                // Receive decrypted packets from channel and send to TUN
                Some(decrypted_packet) = rx.recv() => {
                    match dev.send(&decrypted_packet).await {
-                       Ok(sent) => println!("Sent {sent} bytes to TUN device"),
-                       Err(e) => eprintln!("Failed to send to TUN: {e}"),
+                       Ok(_sent) => {},
+                       Err(_e) => {},
                    }
                }
 
                // Receive decrypted packets from channel and send to TUN
                Some((encrypted_packet, peer_addr)) = urx.recv() => {
                    match sock.send_to(&encrypted_packet, peer_addr).await {
-                       Ok(sent) => println!("Sent {sent} bytes to UDP socket"),
-                       Err(e) => eprintln!("Failed to send to UDP: {e}"),
+                       Ok(_sent) => {},
+                       Err(_e) => {},
                    }
                }
 
@@ -258,9 +258,7 @@ async fn main() -> io::Result<()> {
                             let runtime_conf = Arc::clone(&runtime_config);
                            tokio::spawn(async move {
                            if len >= 20 {
-                               eprintln!("Available peers: {:?}", conf_clone.peers.keys().collect::<Vec<_>>());
                                if let Some(dst_ip) = extract_dst_ip(&buf[..len]) {
-                                   println!("TUN packet: destination IP = {dst_ip}");
                                    if let Some(peer) = conf_clone.peers.get(&dst_ip) {
                                        // Encrypt packet
 
@@ -276,23 +274,25 @@ async fn main() -> io::Result<()> {
                                                 packet.extend_from_slice(&nonce_bytes);
                                                 packet.extend_from_slice(&encrypted);
 
-                                                println!("Sending encrypted packet to peer: {}", peer.sock_addr);
 
                                                 if let Err(e) = utx_clone.send((packet, peer.sock_addr)) {
                                                     eprintln!("Failed to send to channel: {e}");
                                                 }
                                             }
-                                            Err(e) => eprintln!("Encryption failed: {e}"),
+                                            Err(_e) => {},
                                         }
 
                                     } else {
+                                        #[cfg(debug_assertions)]
                                        eprintln!("No cipher found for peer: {}", dst_ip);
                                     }
 
                                    } else {
+                                        #[cfg(debug_assertions)]
                                        eprintln!("No peer found for destination IP: {dst_ip}");
                                    }
                                } else {
+                                    #[cfg(debug_assertions)]
                                    eprintln!("Failed to extract destination IP from packet");
                                }
                            }

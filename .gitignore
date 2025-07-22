@@ -2,3 +2,5 @@
 config.yaml
 private
 public
+perf.data
+flamegraph.svg
