@@ -248,7 +248,7 @@ async fn main() -> io::Result<()> {
                        // handle TUN device
                        if let Ok((buf,len)) =  result {
                            let utx_clone = utx.clone();
-                            let mut packet = packet.clone();
+                            let packet = &mut packet;
                            let conf_clone = Arc::clone(&config);
                             let runtime_conf = Arc::clone(&runtime_config);
                            if len >= 20 {
@@ -269,7 +269,7 @@ async fn main() -> io::Result<()> {
                                                 packet.extend_from_slice(&encrypted);
 
 
-                                                if let Err(e) = utx_clone.send((packet, peer.sock_addr)).await {
+                                                if let Err(e) = utx_clone.send((packet.clone(), peer.sock_addr)).await {
                                                     eprintln!("Failed to send to channel: {e}");
                                                 }
                                             }
