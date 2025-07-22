@@ -31,6 +31,7 @@ pub struct Peer {
 struct RuntimeConfig {
     shared_secrets: HashMap<IpAddr, [u8; 32]>,
     ciphers: HashMap<IpAddr, ChaCha20Poly1305>,
+    ips: HashMap<SocketAddr, IpAddr>,
 }
 
 // Constants
@@ -141,6 +142,7 @@ async fn main() -> io::Result<()> {
     base64::decode_config_slice(&config.secret, base64::STANDARD, &mut secret_bytes).unwrap();
     let static_secret = StaticSecret::from(secret_bytes);
 
+    let ips = HashMap::new();
     for (ip, peer) in &config.peers {
         let mut pub_key_bytes = [0u8; 32];
         base64::decode_config_slice(&peer.pub_key, base64::STANDARD, &mut pub_key_bytes).unwrap();
@@ -149,11 +151,13 @@ async fn main() -> io::Result<()> {
         let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
         shared_secrets.insert(*ip, *shared_secret.as_bytes());
         ciphers.insert(*ip, cipher);
+        ips.insert(peer.sock_addr, *ip);
     }
 
     let runtime_config = Arc::new(RuntimeConfig {
         shared_secrets,
         ciphers,
+        ips,
     });
     println!(
         "Runtime config initialized with {} peers",
@@ -190,7 +194,6 @@ async fn main() -> io::Result<()> {
                 let recv_result =sock.recv_from(&mut udp_buf).await;
                 recv_result.map(|(len,addr)| (udp_buf, len, addr)) } => {
                        if let Ok((udp_buf, len, peer_addr)) =result {
-                           let conf_clone = Arc::clone(&config);
                             let runtime_conf = Arc::clone(&runtime_config);
                            let tx_clone = tx.clone();
                            tokio::spawn(async move {
@@ -200,12 +203,11 @@ async fn main() -> io::Result<()> {
                                    let nonce = Nonce::from_slice(&udp_buf[..12]);
                                    let encrypted_data = &udp_buf[12..len];
 
-                                   // Find peer by socket address to get shared secret
-                                   if let Some((_, peer)) = conf_clone.peers.iter().find(|(_, p)| p.sock_addr == peer_addr) {
                                        // let shared_secret = runtime_conf.shared_secrets.get(&peer.sock_addr.ip()).unwrap_or(&[0u8; 32]);
 
                                        // let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
-                                       if let Some(cipher) = runtime_conf.ciphers.get(&peer.sock_addr.ip()) {
+                                    if let Some(ip) = runtime_conf.ips.get(&peer_addr) {
+                                       if let Some(cipher) = runtime_conf.ciphers.get(&ip) {
                                         match cipher.decrypt(nonce, encrypted_data) {
                                             Ok(decrypted) => {
                                                 if decrypted.len() >= 20 {
@@ -217,11 +219,11 @@ async fn main() -> io::Result<()> {
                                             Err(e) => eprintln!("Decryption failed: {e}"),
                                         }
                                         }else {
-                                           eprintln!("No cipher found for peer: {}", peer.sock_addr.ip());
+                                           eprintln!("No cipher found for peer: {}", ip);
                                         }
-                                   } else {
-                                       eprintln!("No peer found for address: {peer_addr}");
-                                   }
+                                    } else {
+                                        eprintln!("No IP found for peer address: {}", peer_addr);
+                                    }
                                }
                            });
                        }
@@ -284,7 +286,7 @@ async fn main() -> io::Result<()> {
                                         }
 
                                     } else {
-                                       eprintln!("No cipher found for peer: {}", peer.sock_addr.ip());
+                                       eprintln!("No cipher found for peer: {}", dst_ip);
                                     }
 
                                    } else {
