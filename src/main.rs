@@ -36,6 +36,7 @@ struct RuntimeConfig {
 
 // Constants
 const MTU: usize = 1504;
+const CHANNEL_BUFFER_SIZE: usize = 1024; // Buffered channels
 
 // CLI
 #[derive(Parser)]
@@ -91,25 +92,6 @@ async fn main() -> io::Result<()> {
         None => {}
     }
 
-    let alice_secret = EphemeralSecret::random();
-    let alice_public = PublicKey::from(&alice_secret);
-
-    let mut peers: HashMap<IpAddr, Peer> = HashMap::new();
-
-    peers.insert(
-        IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-        Peer {
-            sock_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 68, 100, 1)), 1194),
-            pub_key: base64::encode(alice_public.to_bytes()),
-        },
-    );
-    peers.insert(
-        IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
-        Peer {
-            sock_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 68, 100, 2)), 1194),
-            pub_key: base64::encode(alice_public.to_bytes()),
-        },
-    );
     // Load config file
     let config_path = "config.yaml";
     let conf: Config = match std::fs::read_to_string(config_path) {
@@ -118,6 +100,26 @@ async fn main() -> io::Result<()> {
             eprintln!("No config file found! using defaults.");
             let private_key = StaticSecret::random();
             let public_key = PublicKey::from(&private_key);
+
+            let alice_secret = EphemeralSecret::random();
+            let alice_public = PublicKey::from(&alice_secret);
+
+            let mut peers: HashMap<IpAddr, Peer> = HashMap::new();
+
+            peers.insert(
+                IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                Peer {
+                    sock_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 68, 100, 1)), 1194),
+                    pub_key: base64::encode(alice_public.to_bytes()),
+                },
+            );
+            peers.insert(
+                IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+                Peer {
+                    sock_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 68, 100, 2)), 1194),
+                    pub_key: base64::encode(alice_public.to_bytes()),
+                },
+            );
             let conf = Config {
                 name: "utun0".to_string(),
                 address: "10.0.0.1".to_string(),
@@ -159,15 +161,6 @@ async fn main() -> io::Result<()> {
         ciphers,
         ips,
     });
-    println!(
-        "Runtime config initialized with {} peers",
-        runtime_config.ciphers.len()
-    );
-    println!(
-        "Shared sercrets: {:?} -> {:?}",
-        runtime_config.shared_secrets.keys().collect::<Vec<_>>(),
-        runtime_config.shared_secrets.values().collect::<Vec<_>>()
-    );
 
     let mut tun_config = tun::Configuration::default();
     tun_config
@@ -182,9 +175,9 @@ async fn main() -> io::Result<()> {
     println!("UDP socket bound to: {}", sock.local_addr()?);
 
     // Create channel for sending decrypted packets to TUN device
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(CHANNEL_BUFFER_SIZE);
     // Create channel for sending encrypted packets to UDP socket
-    let (utx, mut urx) = mpsc::unbounded_channel::<(Vec<u8>, SocketAddr)>();
+    let (utx, mut urx) = mpsc::channel::<(Vec<u8>, SocketAddr)>(CHANNEL_BUFFER_SIZE);
 
     // Pre-allocate buffers to avoid repeated allocations
     let mut udp_buf = [0u8; MTU + 512];
@@ -212,7 +205,7 @@ async fn main() -> io::Result<()> {
                                         match cipher.decrypt(nonce, encrypted_data) {
                                             Ok(decrypted) => {
                                                 if decrypted.len() >= 20 {
-                                                    if let Err(e) = tx_clone.send(decrypted) {
+                                                    if let Err(e) = tx_clone.send(decrypted).await {
                                                     }
                                                 }
                                             }
@@ -273,7 +266,7 @@ async fn main() -> io::Result<()> {
                                                 packet.extend_from_slice(&encrypted);
 
 
-                                                if let Err(e) = utx_clone.send((packet, peer.sock_addr)) {
+                                                if let Err(e) = utx_clone.send((packet, peer.sock_addr)).await {
                                                     eprintln!("Failed to send to channel: {e}");
                                                 }
                                             }
