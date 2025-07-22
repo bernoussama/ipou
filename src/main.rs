@@ -186,11 +186,14 @@ async fn main() -> io::Result<()> {
     // Create channel for sending encrypted packets to UDP socket
     let (utx, mut urx) = mpsc::unbounded_channel::<(Vec<u8>, SocketAddr)>();
 
+    // Pre-allocate buffers to avoid repeated allocations
+    let mut udp_buf = [0u8; MTU + 512];
+    let mut buf = [0u8; MTU];
+
     loop {
         tokio::select! {
 
             result = async {
-                let mut udp_buf = [0u8; MTU + 512]; // 512 bytes for nonce + auth tag + data
                 let recv_result =sock.recv_from(&mut udp_buf).await;
                 recv_result.map(|(len,addr)| (udp_buf, len, addr)) } => {
                        if let Ok((udp_buf, len, peer_addr)) =result {
@@ -244,8 +247,6 @@ async fn main() -> io::Result<()> {
                }
 
                 result = async {
-
-                    let mut buf = [0u8; MTU];
                     let recv_result = dev.recv(&mut buf).await;
                     recv_result.map(|len| (buf, len))
                 } => {
