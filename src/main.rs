@@ -36,7 +36,7 @@ struct RuntimeConfig {
 
 // Constants
 const MTU: usize = 1504;
-const CHANNEL_BUFFER_SIZE: usize = 1024; // Buffered channels
+const CHANNEL_BUFFER_SIZE: usize = MTU + 512; // Buffered channels
 
 // CLI
 #[derive(Parser)]
