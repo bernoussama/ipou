@@ -319,11 +319,13 @@ fn extract_src_ip(packet: &[u8]) -> Option<IpAddr> {
 
 fn extract_dst_ip(packet: &[u8]) -> Option<IpAddr> {
     if packet.len() < 20 {
+        #[cfg(debug_assertions)]
         eprintln!("Packet too short: {} bytes", packet.len());
         return None;
     }
 
     let version = packet[0] >> 4;
+    #[cfg(debug_assertions)]
     eprintln!(
         "IP version: {}, first bytes: {:02x} {:02x} {:02x} {:02x}",
         version, packet[0], packet[1], packet[2], packet[3]
@@ -333,9 +335,11 @@ fn extract_dst_ip(packet: &[u8]) -> Option<IpAddr> {
         let dst_ip = IpAddr::V4(Ipv4Addr::new(
             packet[16], packet[17], packet[18], packet[19],
         ));
+        #[cfg(debug_assertions)]
         eprintln!("Extracted destination IP: {dst_ip}");
         Some(dst_ip)
     } else {
+        #[cfg(debug_assertions)]
         eprintln!("Non-IPv4 packet, version: {version}");
         None
     }
