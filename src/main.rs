@@ -262,28 +262,26 @@ async fn main() -> io::Result<()> {
                                    if let Some(peer) = conf_clone.peers.get(&dst_ip) {
                                        // Encrypt packet
 
-                                       if let Some(cipher) = runtime_conf.ciphers.get(&peer.sock_addr.ip()) {
+                                       if let Some(cipher) = runtime_conf.ciphers.get(&dst_ip)  {
+                                        let mut nonce_bytes = [0u8; 12];
+                                        rand::rng().fill_bytes(&mut nonce_bytes);
+                                        let nonce = Nonce::from_slice(&nonce_bytes);
 
+                                        match cipher.encrypt(nonce, &buf[..len]) {
+                                            Ok(encrypted) => {
+                                                // Prepend nonce to encrypted data
+                                                let mut packet = Vec::with_capacity(12 + encrypted.len());
+                                                packet.extend_from_slice(&nonce_bytes);
+                                                packet.extend_from_slice(&encrypted);
 
-                                       let mut nonce_bytes = [0u8; 12];
-                                       rand::rng().fill_bytes(&mut nonce_bytes);
-                                       let nonce = Nonce::from_slice(&nonce_bytes);
+                                                println!("Sending encrypted packet to peer: {}", peer.sock_addr);
 
-                                       match cipher.encrypt(nonce, &buf[..len]) {
-                                           Ok(encrypted) => {
-                                               // Prepend nonce to encrypted data
-                                               let mut packet = Vec::with_capacity(12 + encrypted.len());
-                                               packet.extend_from_slice(&nonce_bytes);
-                                               packet.extend_from_slice(&encrypted);
-
-                                               println!("Sending encrypted packet to peer: {}", peer.sock_addr);
-
-                                               if let Err(e) = utx_clone.send((packet, peer.sock_addr)) {
-                                                   eprintln!("Failed to send to channel: {e}");
-                                               }
-                                           }
-                                           Err(e) => eprintln!("Encryption failed: {e}"),
-                                       }
+                                                if let Err(e) = utx_clone.send((packet, peer.sock_addr)) {
+                                                    eprintln!("Failed to send to channel: {e}");
+                                                }
+                                            }
+                                            Err(e) => eprintln!("Encryption failed: {e}"),
+                                        }
 
                                     } else {
                                        eprintln!("No cipher found for peer: {}", peer.sock_addr.ip());
