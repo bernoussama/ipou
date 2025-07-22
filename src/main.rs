@@ -155,6 +155,7 @@ async fn main() -> io::Result<()> {
                        if let Ok((udp_buf, len, peer_addr)) =result {
                            let conf_clone = Arc::clone(&config);
                            let tx_clone = tx.clone();
+                           tokio::spawn(async move {
                                println!("UDP packet: {len} bytes from {peer_addr}");
                                if len >= 32 { // 12 bytes nonce + 16 bytes auth tag + min 4 bytes data
                                    // Extract nonce and encrypted data
@@ -184,6 +185,7 @@ async fn main() -> io::Result<()> {
                                        eprintln!("No peer found for address: {peer_addr}");
                                    }
                                }
+                           });
                        }
         }
 
@@ -213,6 +215,7 @@ async fn main() -> io::Result<()> {
                        if let Ok((buf,len)) =  result {
                            let utx_clone = utx.clone();
                            let conf_clone = Arc::clone(&config);
+                           tokio::spawn(async move {
                            if len >= 20 {
                                eprintln!("Available peers: {:?}", conf_clone.peers.keys().collect::<Vec<_>>());
                                if let Some(dst_ip) = extract_dst_ip(&buf[..len]) {
@@ -254,6 +257,7 @@ async fn main() -> io::Result<()> {
                                    eprintln!("Failed to extract destination IP from packet");
                                }
                            }
+                           });
                        }
                    }
                }
