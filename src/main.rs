@@ -155,6 +155,15 @@ async fn main() -> io::Result<()> {
         shared_secrets,
         ciphers,
     });
+    println!(
+        "Runtime config initialized with {} peers",
+        runtime_config.ciphers.len()
+    );
+    println!(
+        "Shared sercrets: {:?} -> {:?}",
+        runtime_config.shared_secrets.keys().collect::<Vec<_>>(),
+        runtime_config.shared_secrets.values().collect::<Vec<_>>()
+    );
 
     let mut tun_config = tun::Configuration::default();
     tun_config
