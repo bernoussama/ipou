@@ -28,6 +28,11 @@ pub struct Peer {
     pub pub_key: String,
 }
 
+struct RuntimeConfig {
+    shared_secrets: HashMap<IpAddr, [u8; 32]>,
+    ciphers: HashMap<IpAddr, ChaCha20Poly1305>,
+}
+
 // Constants
 const MTU: usize = 1504;
 
@@ -128,6 +133,29 @@ async fn main() -> io::Result<()> {
     let config = Arc::new(conf);
 
     let config_clone = Arc::clone(&config);
+    // Initialize once after config load
+    let mut shared_secrets = HashMap::new();
+    let mut ciphers = HashMap::new();
+
+    let mut secret_bytes = [0u8; 32];
+    base64::decode_config_slice(&config.secret, base64::STANDARD, &mut secret_bytes).unwrap();
+    let static_secret = StaticSecret::from(secret_bytes);
+
+    for (ip, peer) in &config.peers {
+        let mut pub_key_bytes = [0u8; 32];
+        base64::decode_config_slice(&peer.pub_key, base64::STANDARD, &mut pub_key_bytes).unwrap();
+        let pub_key = PublicKey::from(pub_key_bytes);
+        let shared_secret = static_secret.diffie_hellman(&pub_key);
+        let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
+        shared_secrets.insert(*ip, *shared_secret.as_bytes());
+        ciphers.insert(*ip, cipher);
+    }
+
+    let runtime_config = Arc::new(RuntimeConfig {
+        shared_secrets,
+        ciphers,
+    });
+
     let mut tun_config = tun::Configuration::default();
     tun_config
         .tun_name(&config_clone.name)
@@ -154,6 +182,7 @@ async fn main() -> io::Result<()> {
                 recv_result.map(|(len,addr)| (udp_buf, len, addr)) } => {
                        if let Ok((udp_buf, len, peer_addr)) =result {
                            let conf_clone = Arc::clone(&config);
+                            let runtime_conf = Arc::clone(&runtime_config);
                            let tx_clone = tx.clone();
                            tokio::spawn(async move {
                                println!("UDP packet: {len} bytes from {peer_addr}");
@@ -164,13 +193,10 @@ async fn main() -> io::Result<()> {
 
                                    // Find peer by socket address to get shared secret
                                    if let Some((_, peer)) = conf_clone.peers.iter().find(|(_, p)| p.sock_addr == peer_addr) {
-                                       let mut secret_bytes = [0u8; 32];
-                                       base64::decode_config_slice(&conf_clone.secret, base64::STANDARD, &mut secret_bytes).unwrap();
-                                       let mut pub_key_bytes = [0u8; 32];
-                                       base64::decode_config_slice(&peer.pub_key, base64::STANDARD, &mut pub_key_bytes).unwrap();
-                                       let shared_secret = StaticSecret::from(secret_bytes).diffie_hellman(&PublicKey::from(pub_key_bytes));
+                                       // let shared_secret = runtime_config.shared_secrets.get(&peer.sock_addr.ip()).unwrap_or(&[0u8; 32]);
 
-                                       let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
+                                       // let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
+                                       let cipher = runtime_conf.ciphers.get(&peer.sock_addr.ip()).unwrap();
                                        match cipher.decrypt(nonce, encrypted_data) {
                                            Ok(decrypted) => {
                                                if decrypted.len() >= 20 {
@@ -215,21 +241,15 @@ async fn main() -> io::Result<()> {
                        if let Ok((buf,len)) =  result {
                            let utx_clone = utx.clone();
                            let conf_clone = Arc::clone(&config);
+                            let runtime_conf = Arc::clone(&runtime_config);
                            tokio::spawn(async move {
                            if len >= 20 {
                                eprintln!("Available peers: {:?}", conf_clone.peers.keys().collect::<Vec<_>>());
                                if let Some(dst_ip) = extract_dst_ip(&buf[..len]) {
                                    println!("TUN packet: destination IP = {dst_ip}");
                                    if let Some(peer) = conf_clone.peers.get(&dst_ip) {
-                                       // DH shared secret
-                                       let mut secret_bytes = [0u8; 32];
-                                       base64::decode_config_slice(&conf_clone.secret, base64::STANDARD, &mut secret_bytes).unwrap();
-                                       let mut pub_key_bytes = [0u8; 32];
-                                       base64::decode_config_slice(&peer.pub_key, base64::STANDARD, &mut pub_key_bytes).unwrap();
-                                       let shared_secret = StaticSecret::from(secret_bytes).diffie_hellman(&PublicKey::from(pub_key_bytes));
-
                                        // Encrypt packet
-                                       let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
+                                       let cipher = runtime_conf.ciphers.get(&peer.sock_addr.ip()).unwrap();
                                        let mut nonce_bytes = [0u8; 12];
                                        rand::rng().fill_bytes(&mut nonce_bytes);
                                        let nonce = Nonce::from_slice(&nonce_bytes);
