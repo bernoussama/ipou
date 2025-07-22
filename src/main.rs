@@ -142,7 +142,7 @@ async fn main() -> io::Result<()> {
     base64::decode_config_slice(&config.secret, base64::STANDARD, &mut secret_bytes).unwrap();
     let static_secret = StaticSecret::from(secret_bytes);
 
-    let ips = HashMap::new();
+    let mut ips = HashMap::new();
     for (ip, peer) in &config.peers {
         let mut pub_key_bytes = [0u8; 32];
         base64::decode_config_slice(&peer.pub_key, base64::STANDARD, &mut pub_key_bytes).unwrap();
