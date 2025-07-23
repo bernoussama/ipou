@@ -52,42 +52,46 @@ pub async fn handle_tun_packet(
     runtime_conf: Arc<RuntimeConfig>,
     utx_clone: mpsc::Sender<(Vec<u8>, SocketAddr)>,
 ) {
-    if let Some(src_ip) = extract_src_ip(buf) {
-        if let Some(dst_ip) = extract_dst_ip(buf) {
-            if let Some(peer) = conf_clone.peers.get(&dst_ip) {
-                if let Some(cipher) = runtime_conf.ciphers.get(&dst_ip) {
-                    let mut nonce_bytes = [0u8; 12];
-                    rand::rng().fill_bytes(&mut nonce_bytes);
-                    let nonce = Nonce::from_slice(&nonce_bytes);
-                    let data = &buf[12..len];
-                    match cipher.encrypt(nonce, data) {
-                        Ok(encrypted) => {
-                            packet.clear();
-                            packet.extend_from_slice(&nonce_bytes); // Include nonce
-                            packet.extend_from_slice(&encrypted);
-                            if let Err(e) = utx_clone.send((packet.clone(), peer.sock_addr)).await {
-                                #[cfg(debug_assertions)]
-                                eprintln!("Error sending encrypted packet through channel: {e}");
-                            }
+    if let Some(dst_ip) = extract_dst_ip(buf) {
+        if let Some(peer) = conf_clone.peers.get(&dst_ip) {
+            if let Some(cipher) = runtime_conf.ciphers.get(&dst_ip) {
+                let mut nonce_bytes = [0u8; 12];
+                rand::rng().fill_bytes(&mut nonce_bytes);
+                let nonce = Nonce::from_slice(&nonce_bytes);
+                let data = &buf[12..len];
+                match cipher.encrypt(nonce, data) {
+                    Ok(encrypted) => {
+                        packet.clear();
+                        packet.extend_from_slice(&nonce_bytes); // Include nonce
+                        packet.extend_from_slice(&encrypted);
+                        #[cfg(debug_assertions)]
+                        println!(
+                            "Sending encrypted packet to {}: {} bytes",
+                            peer.sock_addr,
+                            packet.len()
+                        );
+                        if let Err(e) = utx_clone.send((packet.clone(), peer.sock_addr)).await {
+                            #[cfg(debug_assertions)]
+                            eprintln!("Error sending encrypted packet through channel: {e}");
                         }
-                        Err(_e) => {}
                     }
-                } else {
-                    #[cfg(debug_assertions)]
-                    eprintln!("No cipher found for source IP: {dst_ip}")
+                    Err(_e) => {
+                        #[cfg(debug_assertions)]
+                        eprintln!("Error encrypting packet for destination IP: {dst_ip}");
+                    }
                 }
+            } else {
+                #[cfg(debug_assertions)]
+                eprintln!("No cipher found for source IP: {dst_ip}")
             }
-        } else {
-            #[cfg(debug_assertions)]
-            eprintln!("Failed to extract destination IP from packet");
         }
     } else {
         #[cfg(debug_assertions)]
-        eprintln!("Failed to extract source IP from packet");
+        eprintln!("Failed to extract destination IP from packet");
     }
 }
 
-fn extract_src_ip(packet: &[u8]) -> Option<IpAddr> {
+fn _extract_src_ip(packet: &[u8]) -> Option<IpAddr> {
     if packet.len() < 20 {
         return None;
     }

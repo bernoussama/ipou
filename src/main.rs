@@ -114,8 +114,13 @@ async fn main() -> Result<()> {
 
            // Receive decrypted packets from channel and send to TUN
            Some((encrypted_packet, peer_addr)) = urx.recv() => {
+                #[cfg(debug_assertions)]
+                println!("Sending encrypted packet to peer: {peer_addr}");
                match sock.send_to(&encrypted_packet, peer_addr).await {
-                   Ok(_sent) => {},
+                   Ok(sent) => {
+                    #[cfg(debug_assertions)]
+                    println!("Sent {sent} bytes to {peer_addr}");
+                },
                    Err(_e) => {},
                }
            }
