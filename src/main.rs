@@ -8,10 +8,11 @@ use std::{
 };
 
 use clap::Parser;
-use ipou::error::Result;
+use ipou::Result;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use x25519_dalek::{PublicKey, StaticSecret};
+
 // Constants
 const MTU: usize = 1420;
 const CHANNEL_BUFFER_SIZE: usize = MTU + 512; // Buffered channels
@@ -90,49 +91,50 @@ async fn main() -> Result<()> {
     loop {
         tokio::select! {
 
-            result = async {
-                let recv_result =sock.recv_from(&mut udp_buf).await;
-                recv_result.map(|(len,addr)| (udp_buf, len, addr)) } => {
-                       if let Ok((udp_buf, len, peer_addr)) = result {
-                            let runtime_conf = Arc::clone(&runtime_config);
-                           let tx_clone = tx.clone();
-                            if len >= 32 { // 12 bytes nonce + 16 bytes auth tag + min 4 bytes data
-                                ipou::net::handle_udp_packet(&udp_buf, len, peer_addr, runtime_conf,tx_clone).await
-                            }
-                       }
+        result = async {
+            let recv_result =sock.recv_from(&mut udp_buf).await;
+            recv_result.map(|(len,addr)| (udp_buf, len, addr))
+            } => {
+                   if let Ok((udp_buf, len, peer_addr)) = result {
+                        let runtime_conf = Arc::clone(&runtime_config);
+                       let tx_clone = tx.clone();
+                        if len >= 32 { // 12 bytes nonce + 16 bytes auth tag + min 4 bytes data
+                            ipou::net::handle_udp_packet(&udp_buf, len, peer_addr, runtime_conf,tx_clone).await
+                        }
+                   }
         }
 
-               // Receive decrypted packets from channel and send to TUN
-               Some(decrypted_packet) = rx.recv() => {
-                   match dev.send(&decrypted_packet).await {
-                       Ok(_sent) => {},
-                       Err(_e) => {},
-                   }
+           // Receive decrypted packets from channel and send to TUN
+           Some(decrypted_packet) = rx.recv() => {
+               match dev.send(&decrypted_packet).await {
+                   Ok(_sent) => {},
+                   Err(_e) => {},
                }
+           }
 
-               // Receive decrypted packets from channel and send to TUN
-               Some((encrypted_packet, peer_addr)) = urx.recv() => {
-                   match sock.send_to(&encrypted_packet, peer_addr).await {
-                       Ok(_sent) => {},
-                       Err(_e) => {},
-                   }
+           // Receive decrypted packets from channel and send to TUN
+           Some((encrypted_packet, peer_addr)) = urx.recv() => {
+               match sock.send_to(&encrypted_packet, peer_addr).await {
+                   Ok(_sent) => {},
+                   Err(_e) => {},
                }
+           }
 
-                result = async {
-                    let recv_result = dev.recv(&mut buf).await;
-                    recv_result.map(|len| (buf, len))
-                } => {
-                       // handle TUN device
-                       if let Ok((buf,len)) =  result {
-                           let utx_clone = utx.clone();
-                            let packet = &mut packet;
-                           let conf_clone = Arc::clone(&config);
-                            let runtime_conf = Arc::clone(&runtime_config);
-                           if len >= 20 {
-                              ipou::net::handle_tun_packet(&buf, len, packet,conf_clone, runtime_conf, utx_clone).await
-                           }
+            result = async {
+                let recv_result = dev.recv(&mut buf).await;
+                recv_result.map(|len| (buf, len))
+            } => {
+                   // handle TUN device
+                   if let Ok((buf,len)) =  result {
+                       let utx_clone = utx.clone();
+                        let packet = &mut packet;
+                       let conf_clone = Arc::clone(&config);
+                        let runtime_conf = Arc::clone(&runtime_config);
+                       if len >= 20 {
+                          ipou::net::handle_tun_packet(&buf, len, packet,conf_clone, runtime_conf, utx_clone).await
                        }
                    }
                }
+           }
     }
 }

@@ -11,3 +11,11 @@ pub struct Peer {
     pub sock_addr: SocketAddr,
     pub pub_key: String,
 }
+
+#[derive(thiserror::Error, Debug)]
+pub enum IpouError {
+    #[error("An unknown error occurred: {0}")]
+    Unknown(String),
+}
+
+pub type Result<T> = std::result::Result<T, IpouError>;

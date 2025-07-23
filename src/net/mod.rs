@@ -1,8 +1,8 @@
-use std::net::{IpAddr, Ipv4Addr};
-use std::{net::SocketAddr, sync::Arc};
-
 use chacha20poly1305::Nonce;
 use chacha20poly1305::aead::Aead;
+use rand::RngCore;
+use std::net::{IpAddr, Ipv4Addr};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::mpsc;
 
 use crate::config::{Config, RuntimeConfig};
@@ -53,11 +53,14 @@ pub async fn handle_tun_packet(
         if let Some(dst_ip) = extract_dst_ip(buf) {
             if let Some(peer) = conf_clone.peers.get(&dst_ip) {
                 if let Some(cipher) = runtime_conf.ciphers.get(&src_ip) {
-                    let nonce = Nonce::from_slice(&buf[..12]);
-                    let encrypted_data = &buf[12..len];
-                    match cipher.encrypt(nonce, encrypted_data) {
+                    let mut nonce_bytes = [0u8; 12];
+                    rand::rng().fill_bytes(&mut nonce_bytes);
+                    let nonce = Nonce::from_slice(&nonce_bytes);
+                    let data = &buf[12..len];
+                    match cipher.encrypt(nonce, data) {
                         Ok(encrypted) => {
                             packet.clear();
+                            packet.extend_from_slice(&nonce_bytes); // Include nonce
                             packet.extend_from_slice(&encrypted);
                             if let Err(e) = utx_clone.send((packet.clone(), peer.sock_addr)).await {
                                 #[cfg(debug_assertions)]
@@ -68,7 +71,7 @@ pub async fn handle_tun_packet(
                     }
                 } else {
                     #[cfg(debug_assertions)]
-                    eprintln!("No cipher found for source IP: {src_ip}");
+                    eprintln!("No cipher found for source IP: {src_ip}")
                 }
             }
         } else {
