@@ -568,6 +568,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_yml",
+ "thiserror",
  "tokio",
  "tun",
  "x25519-dalek",

@@ -5,7 +5,7 @@ use chacha20poly1305::Nonce;
 use chacha20poly1305::aead::Aead;
 use tokio::sync::mpsc;
 
-use crate::RuntimeConfig;
+use crate::config::{Config, RuntimeConfig};
 
 pub async fn handle_udp_packet(
     udp_buf: &[u8],
@@ -23,18 +23,21 @@ pub async fn handle_udp_packet(
             match cipher.decrypt(nonce, encrypted_data) {
                 Ok(decrypted) => {
                     if decrypted.len() >= 20 {
-                        if let Err(e) = tx_clone.send(decrypted).await {}
+                        if let Err(e) = tx_clone.send(decrypted).await {
+                            #[cfg(debug_assertions)]
+                            eprintln!("Error sending decrypted packet through channel: {e}");
+                        }
                     }
                 }
                 Err(_e) => {}
             }
         } else {
             #[cfg(debug_assertions)]
-            eprintln!("No cipher found for peer: {}", ip);
+            eprintln!("No cipher found for peer: {ip}");
         }
     } else {
         #[cfg(debug_assertions)]
-        eprintln!("No IP found for peer address: {}", peer_addr);
+        eprintln!("No IP found for peer address: {peer_addr}");
     }
 }
 
@@ -42,7 +45,7 @@ pub async fn handle_tun_packet(
     buf: &[u8],
     len: usize,
     packet: &mut Vec<u8>,
-    conf_clone: Arc<crate::Config>,
+    conf_clone: Arc<Config>,
     runtime_conf: Arc<RuntimeConfig>,
     utx_clone: mpsc::Sender<(Vec<u8>, SocketAddr)>,
 ) {
@@ -57,13 +60,15 @@ pub async fn handle_tun_packet(
                             packet.clear();
                             packet.extend_from_slice(&encrypted);
                             if let Err(e) = utx_clone.send((packet.clone(), peer.sock_addr)).await {
+                                #[cfg(debug_assertions)]
+                                eprintln!("Error sending encrypted packet through channel: {e}");
                             }
                         }
                         Err(_e) => {}
                     }
                 } else {
                     #[cfg(debug_assertions)]
-                    eprintln!("No cipher found for source IP: {}", src_ip);
+                    eprintln!("No cipher found for source IP: {src_ip}");
                 }
             }
         } else {
