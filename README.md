@@ -28,7 +28,7 @@ A secure, high-performance IP-over-UDP tunnel implementation written in Rust usi
 ### Installation
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/yourusername/ipou
 cd ipou
 cargo build --release
 ```
@@ -241,14 +241,15 @@ This project is in active development. See [PRD.md](PRD.md) for the roadmap.
 
 ### Current Limitations
 
-- IPv4 only
+- IPv4 only  
 - Static peer configuration (no dynamic discovery)
-- Basic error handling
+- No structured logging
 - No rate limiting or DoS protection
+- Basic error recovery
 
 ## License
 
-[Add your license here]
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Security Notice
 
