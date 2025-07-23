@@ -18,4 +18,5 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yml = "0.0.12"
 chacha20poly1305 = "0.10.1"
 rand = "0.9.1"
-thiserror = "2.0.12"
+thiserror = "1.0.61"
+anyhow = "1.0.86"

@@ -34,10 +34,10 @@ pub struct Config {
 ///
 /// If the file does not exist, it creates a default configuration
 /// with a newly generated keypair and writes it to the path.
-pub fn load_config(config_path: &str) -> Config {
+pub fn load_config(config_path: &str) -> crate::Result<Config> {
     match std::fs::read_to_string(config_path) {
-        Ok(content) => serde_yml::from_str(&content).expect("Failed to parse config file"),
-        Err(_) => {
+        Ok(content) => Ok(serde_yml::from_str(&content)?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             println!("No config file found at '{}', creating a default one.", config_path);
 
             // Generate a new keypair for the default config.
@@ -47,17 +47,18 @@ pub fn load_config(config_path: &str) -> Config {
                 private_key: base64::encode(private_key),
                 peers: vec![
                     PeerConfig {
-                        public_key: base64::encode(public_key), // Example peer (self)
-                        endpoint: Some("127.0.0.1:51820".parse().unwrap()),
+                        public_key: base64::encode(public_key),
+                        endpoint: Some("127.0.0.1:51820".parse().map_err(|e| anyhow::anyhow!("Failed to parse default endpoint: {}", e))?),
                         allowed_ips: vec!["10.0.0.1/32".to_string()],
                     }
                 ],
             };
 
-            let yaml_config = serde_yml::to_string(&default_config).unwrap();
-            std::fs::write(config_path, yaml_config).expect("Failed to write default config file");
+            let yaml_config = serde_yml::to_string(&default_config)?;
+            std::fs::write(config_path, yaml_config)?;
 
-            default_config
+            Ok(default_config)
         }
+        Err(e) => Err(e.into()),
     }
 }

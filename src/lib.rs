@@ -25,6 +25,10 @@ pub enum IpouError {
     InvalidKeyLength(usize),
     #[error("TUN device creation failed: {0}")]
     TunDevice(#[from] tun::Error),
+    #[error(transparent)]
+    Anyhow(#[from] anyhow::Error),
+    #[error("Task join error: {0}")]
+    Join(#[from] tokio::task::JoinError),
 }
 
 pub type Result<T> = std::result::Result<T, IpouError>;
