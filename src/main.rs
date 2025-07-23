@@ -35,7 +35,7 @@ struct RuntimeConfig {
 }
 
 // Constants
-const MTU: usize = 1500;
+const MTU: usize = 1420;
 const CHANNEL_BUFFER_SIZE: usize = MTU + 512; // Buffered channels
 const ENCRYPTION_OVERHEAD: usize = 28; // 12 nonce + 16 auth tag
 
