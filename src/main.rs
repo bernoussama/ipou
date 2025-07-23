@@ -98,7 +98,7 @@ async fn main() -> Result<()> {
                    if let Ok((udp_buf, len, peer_addr)) = result {
                         let runtime_conf = Arc::clone(&runtime_config);
                        let tx_clone = tx.clone();
-                        if len >= 32 { // 12 bytes nonce + 16 bytes auth tag + min 4 bytes data
+                        if len >= 28 { // 12 bytes nonce + 16 bytes auth tag
                             ipou::net::handle_udp_packet(&udp_buf, len, peer_addr, runtime_conf,tx_clone).await
                         }
                    }

@@ -24,22 +24,20 @@ pub async fn handle_udp_packet(
                 Ok(decrypted) => {
                     if decrypted.len() >= 20 {
                         if let Err(e) = tx_clone.send(decrypted).await {
-                            #[cfg(debug_assertions)]
                             eprintln!("Error sending decrypted packet through channel: {e}");
                         }
+                    } else {
+                        eprintln!("Decrypted packet too short: {} bytes", decrypted.len());
                     }
                 }
                 Err(e) => {
-                    #[cfg(debug_assertions)]
                     eprintln!("Decryption failed for peer {ip}: {e}");
                 }
             }
         } else {
-            #[cfg(debug_assertions)]
             eprintln!("No cipher found for peer: {ip}");
         }
     } else {
-        #[cfg(debug_assertions)]
         eprintln!("No IP found for peer address: {peer_addr}");
     }
 }
@@ -58,7 +56,7 @@ pub async fn handle_tun_packet(
                 let mut nonce_bytes = [0u8; 12];
                 rand::rng().fill_bytes(&mut nonce_bytes);
                 let nonce = Nonce::from_slice(&nonce_bytes);
-                let data = &buf[12..len];
+                let data = &buf[..len];
                 match cipher.encrypt(nonce, data) {
                     Ok(encrypted) => {
                         packet.clear();
