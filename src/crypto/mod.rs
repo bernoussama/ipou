@@ -1,10 +1,13 @@
 use x25519_dalek::{PublicKey, StaticSecret};
 
-/// generate a new X25519 keypair
-pub fn generate_keypair() -> ([u8; 32], [u8; 32]) {
+type PrivateKeyBytes = [u8; 32];
+type PublicKeyBytes = [u8; 32];
+
+/// generate a new X25519 keypair ()->(private_key, public_key)
+pub fn generate_keypair() -> (PrivateKeyBytes, PublicKeyBytes) {
     let private_key = StaticSecret::random();
     let public_key = PublicKey::from(&private_key);
-    (public_key.to_bytes(), private_key.to_bytes())
+    (private_key.to_bytes(), public_key.to_bytes())
 }
 
 pub fn gen_base64_private_key() -> String {
