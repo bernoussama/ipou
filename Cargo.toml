@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ipnet = "2.5.0"
 clap = { version = "4.5.41", features = ["derive"] }
 tokio = {version = "1.46.1", features = ["full"]}
 tun = { version = "0.8", features = ["async"] }
