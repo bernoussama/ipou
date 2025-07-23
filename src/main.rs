@@ -1,7 +1,6 @@
-use chacha20poly1305::aead::Aead;
-use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use clap::{Parser, Subcommand};
-use rand::RngCore;
+use ipou::{Config, Peer, RuntimeConfig};
 use std::io;
 use std::sync::Arc;
 use std::{
@@ -11,28 +10,6 @@ use std::{
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
-
-#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
-pub struct Config {
-    pub name: String,
-    pub address: String,
-    pub port: u16,
-    pub secret: String,
-    pub pubkey: String,
-    pub peers: HashMap<IpAddr, Peer>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
-pub struct Peer {
-    pub sock_addr: SocketAddr,
-    pub pub_key: String,
-}
-
-struct RuntimeConfig {
-    shared_secrets: HashMap<IpAddr, [u8; 32]>,
-    ciphers: HashMap<IpAddr, ChaCha20Poly1305>,
-    ips: HashMap<SocketAddr, IpAddr>,
-}
 
 // Constants
 const MTU: usize = 1420;
@@ -191,37 +168,12 @@ async fn main() -> io::Result<()> {
             result = async {
                 let recv_result =sock.recv_from(&mut udp_buf).await;
                 recv_result.map(|(len,addr)| (udp_buf, len, addr)) } => {
-                       if let Ok((udp_buf, len, peer_addr)) =result {
+                       if let Ok((udp_buf, len, peer_addr)) = result {
                             let runtime_conf = Arc::clone(&runtime_config);
                            let tx_clone = tx.clone();
-                               if len >= 32 { // 12 bytes nonce + 16 bytes auth tag + min 4 bytes data
-                                   // Extract nonce and encrypted data
-                                   let nonce = Nonce::from_slice(&udp_buf[..12]);
-                                   let encrypted_data = &udp_buf[12..len];
-
-                                       // let shared_secret = runtime_conf.shared_secrets.get(&peer.sock_addr.ip()).unwrap_or(&[0u8; 32]);
-
-                                       // let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
-                                    if let Some(ip) = runtime_conf.ips.get(&peer_addr) {
-                                       if let Some(cipher) = runtime_conf.ciphers.get(&ip) {
-                                        match cipher.decrypt(nonce, encrypted_data) {
-                                            Ok(decrypted) => {
-                                                if decrypted.len() >= 20 {
-                                                    if let Err(e) = tx_clone.send(decrypted).await {
-                                                    }
-                                                }
-                                            }
-                                            Err(_e) => {},
-                                        }
-                                        }else {
-                                            #[cfg(debug_assertions)]
-                                           eprintln!("No cipher found for peer: {}", ip);
-                                        }
-                                    } else {
-                                        #[cfg(debug_assertions)]
-                                        eprintln!("No IP found for peer address: {}", peer_addr);
-                                    }
-                               }
+                            if len >= 32 { // 12 bytes nonce + 16 bytes auth tag + min 4 bytes data
+                                ipou::net::handle_udp_packet(&udp_buf, len, peer_addr, runtime_conf,tx_clone).await
+                            }
                        }
         }
 
@@ -252,88 +204,10 @@ async fn main() -> io::Result<()> {
                            let conf_clone = Arc::clone(&config);
                             let runtime_conf = Arc::clone(&runtime_config);
                            if len >= 20 {
-                               if let Some(dst_ip) = extract_dst_ip(&buf[..len]) {
-                                   if let Some(peer) = conf_clone.peers.get(&dst_ip) {
-                                       // Encrypt packet
-
-                                       if let Some(cipher) = runtime_conf.ciphers.get(&dst_ip)  {
-                                        let mut nonce_bytes = [0u8; 12];
-                                        rand::rng().fill_bytes(&mut nonce_bytes);
-                                        let nonce = Nonce::from_slice(&nonce_bytes);
-
-                                        match cipher.encrypt(nonce, &buf[..len]) {
-                                            Ok(encrypted) => {
-                                                // Prepend nonce to encrypted data
-                                                packet.clear();
-                                                packet.extend_from_slice(&nonce_bytes);
-                                                packet.extend_from_slice(&encrypted);
-
-
-                                                if let Err(e) = utx_clone.send((packet.clone(), peer.sock_addr)).await {
-                                                    eprintln!("Failed to send to channel: {e}");
-                                                }
-                                            }
-                                            Err(_e) => {},
-                                        }
-
-                                    } else {
-                                        #[cfg(debug_assertions)]
-                                       eprintln!("No cipher found for peer: {}", dst_ip);
-                                    }
-
-                                   } else {
-                                        #[cfg(debug_assertions)]
-                                       eprintln!("No peer found for destination IP: {dst_ip}");
-                                   }
-                               } else {
-                                    #[cfg(debug_assertions)]
-                                   eprintln!("Failed to extract destination IP from packet");
-                               }
+                              ipou::net::handle_tun_packet(&buf, len, packet,conf_clone, runtime_conf, utx_clone).await
                            }
                        }
                    }
                }
-    }
-}
-
-fn extract_src_ip(packet: &[u8]) -> Option<IpAddr> {
-    if packet.len() < 20 {
-        return None;
-    }
-
-    if packet[0] >> 4 == 4 {
-        Some(IpAddr::V4(Ipv4Addr::new(
-            packet[12], packet[13], packet[14], packet[15],
-        )))
-    } else {
-        None
-    }
-}
-
-fn extract_dst_ip(packet: &[u8]) -> Option<IpAddr> {
-    if packet.len() < 20 {
-        #[cfg(debug_assertions)]
-        eprintln!("Packet too short: {} bytes", packet.len());
-        return None;
-    }
-
-    let version = packet[0] >> 4;
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "IP version: {}, first bytes: {:02x} {:02x} {:02x} {:02x}",
-        version, packet[0], packet[1], packet[2], packet[3]
-    );
-
-    if version == 4 {
-        let dst_ip = IpAddr::V4(Ipv4Addr::new(
-            packet[16], packet[17], packet[18], packet[19],
-        ));
-        #[cfg(debug_assertions)]
-        eprintln!("Extracted destination IP: {dst_ip}");
-        Some(dst_ip)
-    } else {
-        #[cfg(debug_assertions)]
-        eprintln!("Non-IPv4 packet, version: {version}");
-        None
     }
 }
