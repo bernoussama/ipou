@@ -29,7 +29,10 @@ pub async fn handle_udp_packet(
                         }
                     }
                 }
-                Err(_e) => {}
+                Err(e) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("Decryption failed for peer {ip}: {e}");
+                }
             }
         } else {
             #[cfg(debug_assertions)]
@@ -52,7 +55,7 @@ pub async fn handle_tun_packet(
     if let Some(src_ip) = extract_src_ip(buf) {
         if let Some(dst_ip) = extract_dst_ip(buf) {
             if let Some(peer) = conf_clone.peers.get(&dst_ip) {
-                if let Some(cipher) = runtime_conf.ciphers.get(&src_ip) {
+                if let Some(cipher) = runtime_conf.ciphers.get(&dst_ip) {
                     let mut nonce_bytes = [0u8; 12];
                     rand::rng().fill_bytes(&mut nonce_bytes);
                     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -71,7 +74,7 @@ pub async fn handle_tun_packet(
                     }
                 } else {
                     #[cfg(debug_assertions)]
-                    eprintln!("No cipher found for source IP: {src_ip}")
+                    eprintln!("No cipher found for source IP: {dst_ip}")
                 }
             }
         } else {
