@@ -1,0 +1,69 @@
+# Example configuration for anchor-based peer discovery
+# This demonstrates the new dynamic peer discovery capabilities
+
+name: "utun0"
+address: "10.0.0.1"
+port: 1194
+
+# Private key for this peer (generate with: ipou genkey)
+private_key: "ExqFzEHjZ+EIOpLH1zRXC3Fjg87f90I5Ar/f7RG8zCI="
+
+# Protocol configuration settings
+protocol:
+  keepalive_interval: 20      # Send keep-alive every 20 seconds
+  connection_timeout: 75      # Mark connection stale after 75 seconds
+  punch_timeout: 10           # Hole punching timeout
+  max_punch_attempts: 5       # Maximum hole punching attempts
+
+peers:
+  # Anchor peer with static IP (e.g., VPS or cloud server)
+  - public_key: "VDl9iMPMmeN/FtekVy7gFDgGjfJZEgeiYQqMq3RqE34="
+    name: "anchor-east"
+    role: "anchor"
+    endpoint: "203.0.113.10:1194"
+    tunnel_ip: "10.0.0.2"
+    allowed_ips:
+      - "10.0.0.0/24"
+  
+  # Another anchor peer for redundancy
+  - public_key: "A30QZFcWR7dtby+f9fCn+HHGkxCgEztZD0FoGVr27lg="
+    name: "anchor-west"
+    role: "anchor"
+    endpoint: "198.51.100.20:1194"
+    tunnel_ip: "10.0.0.3"
+    allowed_ips:
+      - "10.0.0.0/24"
+      
+  # Dynamic peer behind NAT (mobile client, home router, etc.)
+  - public_key: "xQ+R9J919hG+8+zq/+OX3iw94o5TDJnV68scDaI3QT4="
+    name: "mobile-client"
+    role: "dynamic"
+    tunnel_ip: "10.0.0.4"
+    allowed_ips:
+      - "10.0.0.4/32"
+    anchors:
+      - "VDl9iMPMmeN/FtekVy7gFDgGjfJZEgeiYQqMq3RqE34="  # anchor-east
+      - "A30QZFcWR7dtby+f9fCn+HHGkxCgEztZD0FoGVr27lg="  # anchor-west
+      
+  # Another dynamic peer
+  - public_key: "+M+eKEsNYqUBSeHz94ZieVFeMe6nGw1KtFLHxlFesKE="
+    name: "home-office"
+    role: "dynamic"
+    tunnel_ip: "10.0.0.5"
+    allowed_ips:
+      - "10.0.0.5/32"
+      - "192.168.1.0/24"  # Route home network through this peer
+    anchors:
+      - "VDl9iMPMmeN/FtekVy7gFDgGjfJZEgeiYQqMq3RqE34="  # Use anchor-east for discovery
+
+# How this works:
+# 1. Anchor peers have static IPs and are directly reachable
+# 2. Dynamic peers connect to anchor peers first (handshake)
+# 3. When a dynamic peer wants to reach another dynamic peer:
+#    a. It sends REQUEST_ENDPOINT to an anchor
+#    b. Anchor responds with ENDPOINT_INFO for the target peer
+#    c. Anchor sends INITIATE_PUNCH to both peers
+#    d. Both peers perform simultaneous UDP hole punching
+#    e. Direct peer-to-peer connection established
+# 4. Keep-alive packets maintain connections and detect endpoint changes
+# 5. Automatic reconnection on network changes or connection failures
