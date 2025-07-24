@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 pub mod cli;
 pub mod config;
 pub mod crypto;
+pub mod events;
 pub mod net;
 pub mod protocol;
 pub mod state;
