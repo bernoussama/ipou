@@ -21,11 +21,16 @@ async fn main() -> Result<()> {
     let cli = ipou::cli::Cli::parse();
     // Subcommands
     match &cli.command {
-        Some(ipou::cli::Commands::Genkey {}) => handle_gen_key(),
-        Some(ipou::cli::Commands::Pubkey {}) => handle_pub_key(),
-        None => Ok(()),
+        Some(ipou::cli::Commands::Genkey {}) => {
+            handle_gen_key()?;
+            return Ok(());
+        },
+        Some(ipou::cli::Commands::Pubkey {}) => {
+            handle_pub_key()?;
+            return Ok(());
+        },
+        None => {},
     }
-    .expect("Failed to execute command");
 
     // Load config file
     let config_path = "config.yaml";
