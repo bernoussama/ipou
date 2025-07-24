@@ -3,8 +3,7 @@ use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use crate::net::PeerManager;
 use chacha20poly1305::aead::{Aead, Nonce};
-use rand::Rng;
-use rand::thread_rng;
+
 
 pub async fn handle_udp_packet(
     udp_buf: &[u8],
@@ -42,7 +41,7 @@ pub async fn handle_tun_packet(
             let peers = peer_manager.peers.read().await;
             if let Some(peer) = peers.get(&peer_key) {
                 let mut nonce_bytes = [0u8; 12];
-                rand::RngCore::fill_bytes(&mut thread_rng(), &mut nonce_bytes);
+                rand::RngCore::fill_bytes(&mut rand::rng(), &mut nonce_bytes);
                 let nonce = Nonce::<chacha20poly1305::ChaCha20Poly1305>::from_slice(&nonce_bytes);
 
                 if let Ok(encrypted) = peer.cipher.encrypt(nonce, &buf[..len]) {

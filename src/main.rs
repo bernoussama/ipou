@@ -65,7 +65,7 @@ async fn run() -> Result<()> {
     let tun_reader = tokio::spawn(tun_reader(dev, peer_manager, to_udp_tx));
     let udp_sender = tokio::spawn(udp_sender(sock, to_udp_rx));
 
-    tokio::try_join!(udp_receiver, tun_writer, tun_reader, udp_sender)?;
+    tokio::try_join!(udp_receiver, tun_writer, tun_reader, udp_sender).map(|_| ())?;
 
     Ok(())
 }

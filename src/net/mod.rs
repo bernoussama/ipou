@@ -8,10 +8,7 @@ use std::sync::{Arc};
 use tokio::sync::RwLock;
 
 use crate::config::Config;
-
-use crate::config::Config;
-
-use crate::config::Config;
+use chacha20poly1305::aead::KeyInit;
 
 /// Represents the runtime state of a peer.
 pub struct RuntimePeer {
