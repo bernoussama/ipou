@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use crate::config::{Config, RuntimeConfig};
 
 pub async fn handle_udp_packet(
-    udp_buf: &[u8],
+    udp_buf: [u8; crate::MTU + 512],
     len: usize,
     peer_addr: SocketAddr,
     runtime_conf: Arc<RuntimeConfig>,
@@ -43,14 +43,14 @@ pub async fn handle_udp_packet(
 }
 
 pub async fn handle_tun_packet(
-    buf: &[u8],
+    buf: [u8; crate::MTU],
     len: usize,
-    packet: &mut Vec<u8>,
     conf_clone: Arc<Config>,
     runtime_conf: Arc<RuntimeConfig>,
     utx_clone: mpsc::Sender<(Vec<u8>, SocketAddr)>,
 ) {
-    if let Some(dst_ip) = extract_dst_ip(buf) {
+    let mut packet = Vec::with_capacity(crate::MTU + crate::ENCRYPTION_OVERHEAD);
+    if let Some(dst_ip) = extract_dst_ip(&buf) {
         if let Some(peer) = conf_clone.peers.get(&dst_ip) {
             if let Some(cipher) = runtime_conf.ciphers.get(&dst_ip) {
                 let mut nonce_bytes = [0u8; 12];
