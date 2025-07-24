@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
+pub mod discovery;
+pub mod handshake;
+pub mod keepalive;
+pub mod punch;
+pub mod state_machine;
+
 /// Protocol version for compatibility checking
 pub const PROTOCOL_VERSION: u8 = 1;
 
