@@ -4,6 +4,8 @@ pub mod cli;
 pub mod config;
 pub mod crypto;
 pub mod net;
+pub mod protocol;
+pub mod state;
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
 pub struct Peer {
@@ -25,6 +27,8 @@ pub enum IpouError {
     InvalidKeyLength(usize),
     #[error("TUN device creation failed: {0}")]
     TunDevice(#[from] tun::Error),
+    #[error("UTF-8 conversion error: {0}")]
+    Utf8(#[from] std::str::Utf8Error),
 }
 
 pub type Result<T> = std::result::Result<T, IpouError>;
