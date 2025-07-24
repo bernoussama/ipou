@@ -1,17 +1,39 @@
 use std::net::SocketAddr;
 
+// modules
 pub mod cli;
 pub mod config;
 pub mod crypto;
-pub mod error;
 pub mod net;
+pub mod tasks;
 
+// Constants
+pub const MTU: usize = 1420;
+pub const CHANNEL_BUFFER_SIZE: usize = MTU + 512; // Buffered channels
+pub const ENCRYPTION_OVERHEAD: usize = 28; // 12 nonce + 16 auth tag
+
+// types
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
 pub struct Peer {
     pub sock_addr: SocketAddr,
     pub pub_key: String,
 }
 
+pub type DecryptedPacket = Vec<u8>;
+#[derive(Debug, Clone)]
+pub enum TunMessage {
+    DecryptedPacket,
+    Shutdown,
+}
+
+pub type EncryptedPacket = (Vec<u8>, SocketAddr);
+#[derive(Debug, Clone)]
+pub enum UdpMessage {
+    EncryptedPacket,
+    Shutdown,
+}
+
+// errors
 #[derive(thiserror::Error, Debug)]
 pub enum IpouError {
     #[error("An unknown error occurred: {0}")]

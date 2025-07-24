@@ -2,21 +2,14 @@ use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use ipou::cli::commands::{handle_gen_key, handle_pub_key};
 use ipou::config::RuntimeConfig;
 use std::sync::Arc;
-use std::{
-    collections::HashMap,
-    net::{Ipv4Addr, SocketAddr},
-};
+use std::{collections::HashMap, net::Ipv4Addr};
 
 use clap::Parser;
 use ipou::Result;
+use ipou::tasks;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use x25519_dalek::{PublicKey, StaticSecret};
-
-// Constants
-const MTU: usize = 1420;
-const CHANNEL_BUFFER_SIZE: usize = MTU + 512; // Buffered channels
-const ENCRYPTION_OVERHEAD: usize = 28; // 12 nonce + 16 auth tag
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -61,12 +54,14 @@ async fn main() -> Result<()> {
         ips,
     });
 
+    let runtime_config_clone = Arc::clone(&runtime_config);
+
     let mut tun_config = tun::Configuration::default();
     tun_config
         .tun_name(&config_clone.name)
         .address(config_clone.address.parse::<Ipv4Addr>().unwrap())
         .netmask((255, 255, 255, 0))
-        .mtu(MTU as u16)
+        .mtu(ipou::MTU as u16)
         .up();
 
     let dev = tun::create_as_async(&tun_config).expect("Failed to create TUN device");
@@ -77,69 +72,35 @@ async fn main() -> Result<()> {
         "UDP socket bound to: {}",
         sock.local_addr().expect("Failed to get local address")
     );
+    let dev_arc = Arc::new(dev);
+    let sock_arc = Arc::new(sock);
 
     // Create channel for sending decrypted packets to TUN device
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(CHANNEL_BUFFER_SIZE);
+    let (dtx, drx) = mpsc::channel::<ipou::DecryptedPacket>(ipou::CHANNEL_BUFFER_SIZE);
     // Create channel for sending encrypted packets to UDP socket
-    let (utx, mut urx) = mpsc::channel::<(Vec<u8>, SocketAddr)>(CHANNEL_BUFFER_SIZE);
+    let (etx, erx) = mpsc::channel::<ipou::EncryptedPacket>(ipou::CHANNEL_BUFFER_SIZE);
 
-    // Pre-allocate buffers to avoid repeated allocations
-    let mut udp_buf = [0u8; MTU + 512];
-    let mut buf = [0u8; MTU];
-    let mut packet = Vec::with_capacity(MTU + ENCRYPTION_OVERHEAD);
+    let tun_listener = tokio::spawn(tasks::tun_listener(
+        Arc::clone(&dev_arc),
+        config_clone,
+        runtime_config,
+        etx,
+    ));
+    let udp_listener = tokio::spawn(tasks::udp_listener(
+        Arc::clone(&sock_arc),
+        runtime_config_clone,
+        dtx,
+    ));
+    let result_coordinator = tokio::spawn(tasks::result_coordinator(
+        Arc::clone(&dev_arc),
+        Arc::clone(&sock_arc),
+        erx,
+        drx,
+    ));
 
-    loop {
-        tokio::select! {
+    tokio::try_join!(tun_listener, udp_listener, result_coordinator)
+        .map(|_| ())
+        .expect("Error joining tasks");
 
-        result = async {
-            let recv_result =sock.recv_from(&mut udp_buf).await;
-            recv_result.map(|(len,addr)| (udp_buf, len, addr))
-            } => {
-                   if let Ok((udp_buf, len, peer_addr)) = result {
-                        let runtime_conf = Arc::clone(&runtime_config);
-                       let tx_clone = tx.clone();
-                        if len >= 28 { // 12 bytes nonce + 16 bytes auth tag
-                            ipou::net::handle_udp_packet(&udp_buf, len, peer_addr, runtime_conf,tx_clone).await
-                        }
-                   }
-        }
-
-           // Receive decrypted packets from channel and send to TUN
-           Some(decrypted_packet) = rx.recv() => {
-               match dev.send(&decrypted_packet).await {
-                   Ok(_sent) => {},
-                   Err(_e) => {},
-               }
-           }
-
-           // Receive decrypted packets from channel and send to TUN
-           Some((encrypted_packet, peer_addr)) = urx.recv() => {
-                #[cfg(debug_assertions)]
-                println!("Sending encrypted packet to peer: {peer_addr}");
-               match sock.send_to(&encrypted_packet, peer_addr).await {
-                   Ok(sent) => {
-                    #[cfg(debug_assertions)]
-                    println!("Sent {sent} bytes to {peer_addr}");
-                },
-                   Err(_e) => {},
-               }
-           }
-
-            result = async {
-                let recv_result = dev.recv(&mut buf).await;
-                recv_result.map(|len| (buf, len))
-            } => {
-                   // handle TUN device
-                   if let Ok((buf,len)) =  result {
-                       let utx_clone = utx.clone();
-                        let packet = &mut packet;
-                       let conf_clone = Arc::clone(&config);
-                        let runtime_conf = Arc::clone(&runtime_config);
-                       if len >= 20 {
-                          ipou::net::handle_tun_packet(&buf, len, packet,conf_clone, runtime_conf, utx_clone).await
-                       }
-                   }
-               }
-           }
-    }
+    Ok(())
 }
