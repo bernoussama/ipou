@@ -1,0 +1,6 @@
+private_key: 'ExqFzEHjZ+EIOpLH1zRXC3Fjg87f90I5Ar/f7RG8zCI='
+peers:
+  - public_key: 'A30QZFcWR7dtby+f9fCn+HHGkxCgEztZD0FoGVr27lg='
+    endpoint: '127.0.0.1:51820'
+    allowed_ips:
+      - '10.0.0.2/32'

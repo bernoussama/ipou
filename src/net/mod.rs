@@ -10,6 +10,8 @@ use std::sync::{Arc};
 use tokio::sync::{mpsc, RwLock};
 
 use crate::config::Config;
+use crate::protocol::{ProtocolPacket};
+use crate::protocol::state_machine::ProtocolStateMachine;
 
 /// Represents the runtime state of a peer.
 pub struct RuntimePeer {
@@ -23,6 +25,7 @@ pub struct RuntimePeer {
 #[derive(Clone)]
 pub struct PeerManager {
     peers: Arc<RwLock<HashMap<[u8; 32], RuntimePeer>>>,
+    protocol_manager: Option<Arc<ProtocolStateMachine>>,
 }
 
 impl PeerManager {
@@ -55,7 +58,15 @@ impl PeerManager {
             );
         }
 
-        Self { peers: Arc::new(RwLock::new(peers)) }
+        Self { 
+            peers: Arc::new(RwLock::new(peers)),
+            protocol_manager: None,
+        }
+    }
+
+    /// Set the protocol manager for this peer manager
+    pub fn set_protocol_manager(&mut self, protocol_manager: Arc<ProtocolStateMachine>) {
+        self.protocol_manager = Some(protocol_manager);
     }
 
     pub async fn find_peer_by_ip(&self, ip: IpAddr) -> Option<([u8; 32], SocketAddr)> {
@@ -71,9 +82,52 @@ impl PeerManager {
         }
         None
     }
+
+    /// Update a peer's endpoint (called when we learn their current location)
+    pub async fn update_peer_endpoint(&self, peer_key: [u8; 32], endpoint: SocketAddr) {
+        let mut peers = self.peers.write().await;
+        if let Some(peer) = peers.get_mut(&peer_key) {
+            peer.last_endpoint = Some(endpoint);
+        }
+    }
+
+    /// Get peer cipher for encryption/decryption
+    pub async fn get_peer_cipher(&self, peer_key: &[u8; 32]) -> Option<ChaCha20Poly1305> {
+        let peers = self.peers.read().await;
+        peers.get(peer_key).map(|peer| peer.cipher.clone())
+    }
 }
 
+/// Enhanced UDP packet handler that supports both protocol and VPN packets
 pub async fn handle_udp_packet(
+    udp_buf: &[u8],
+    len: usize,
+    peer_addr: SocketAddr,
+    peer_manager: &PeerManager,
+    tx_clone: mpsc::Sender<Vec<u8>>,
+) {
+    if len < 12 { return; }
+
+    // Try to parse as protocol packet first (YAML-based)
+    if let Ok(protocol_packet) = ProtocolPacket::from_bytes(&udp_buf[..len]) {
+        // This is a protocol packet - handle it through the protocol manager
+        if let Some(protocol_manager) = &peer_manager.protocol_manager {
+            if let Err(e) = protocol_manager
+                .handle_protocol_packet(protocol_packet, peer_addr)
+                .await
+            {
+                eprintln!("Error handling protocol packet: {}", e);
+            }
+        }
+        return;
+    }
+
+    // Fall back to legacy VPN packet handling
+    handle_legacy_vpn_packet(udp_buf, len, peer_addr, peer_manager, tx_clone).await;
+}
+
+/// Legacy VPN packet handler (existing functionality)
+async fn handle_legacy_vpn_packet(
     udp_buf: &[u8],
     len: usize,
     peer_addr: SocketAddr,
