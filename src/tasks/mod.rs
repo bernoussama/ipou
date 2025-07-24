@@ -75,8 +75,13 @@ pub async fn result_coordinator(
                    // Receive decrypted packets from channel and send to TUN
                    Some(decrypted_packet) = drx.recv() => {
                        match dev.send(&decrypted_packet).await {
-                           Ok(_sent) => {},
-                           Err(_e) => {},
+                        Ok(sent) => {
+                            #[cfg(debug_assertions)]
+                            println!("Sent {sent} bytes to TUN dev");
+                        },
+                        Err(e) => {
+                        eprintln!("Error sending packet to TUN device: {e}");
+                        },
                        }
                    }
 
@@ -89,7 +94,9 @@ pub async fn result_coordinator(
                             #[cfg(debug_assertions)]
                             println!("Sent {sent} bytes to {peer_addr}");
                         },
-                           Err(_e) => {},
+                           Err(e) => {
+                               eprintln!("Error sending encrypted packet to peer {peer_addr}: {e}");
+                        },
                        }
                    }
         }
