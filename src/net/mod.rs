@@ -12,7 +12,7 @@ pub async fn handle_udp_packet(
     len: usize,
     peer_addr: SocketAddr,
     runtime_conf: Arc<RuntimeConfig>,
-    tx_clone: mpsc::Sender<Vec<u8>>,
+    dtx: mpsc::Sender<crate::DecryptedPacket>,
 ) {
     // Extract nonce and encrypted data
     let nonce = Nonce::from_slice(&udp_buf[..12]);
@@ -23,7 +23,7 @@ pub async fn handle_udp_packet(
             match cipher.decrypt(nonce, encrypted_data) {
                 Ok(decrypted) => {
                     if decrypted.len() >= 20 {
-                        if let Err(e) = tx_clone.send(decrypted).await {
+                        if let Err(e) = dtx.send(decrypted).await {
                             eprintln!("Error sending decrypted packet through channel: {e}");
                         }
                     } else {
@@ -47,7 +47,7 @@ pub async fn handle_tun_packet(
     len: usize,
     conf_clone: Arc<Config>,
     runtime_conf: Arc<RuntimeConfig>,
-    utx_clone: mpsc::Sender<(Vec<u8>, SocketAddr)>,
+    etx: mpsc::Sender<crate::EncryptedPacket>,
 ) {
     let mut packet = Vec::with_capacity(crate::MTU + crate::ENCRYPTION_OVERHEAD);
     if let Some(dst_ip) = extract_dst_ip(&buf) {
@@ -68,7 +68,7 @@ pub async fn handle_tun_packet(
                             peer.sock_addr,
                             packet.len()
                         );
-                        if let Err(e) = utx_clone.send((packet.clone(), peer.sock_addr)).await {
+                        if let Err(e) = etx.send((packet.clone(), peer.sock_addr)).await {
                             #[cfg(debug_assertions)]
                             eprintln!("Error sending encrypted packet through channel: {e}");
                         }
