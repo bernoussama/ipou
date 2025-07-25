@@ -75,27 +75,25 @@ async fn main() -> Result<()> {
     let dev_arc = Arc::new(dev);
     let sock_arc = Arc::new(sock);
 
-    // Create channel for sending decrypted packets to TUN device
-    let (dtx, drx) = mpsc::channel::<ipou::DecryptedPacket>(ipou::CHANNEL_BUFFER_SIZE);
-    // Create channel for sending encrypted packets to UDP socket
-    let (etx, erx) = mpsc::channel::<ipou::EncryptedPacket>(ipou::CHANNEL_BUFFER_SIZE);
+    // Create channel for sending decrypted packets to TUN device and encrypted packets to UDP
+    // socket
+    let (tx, rx) = mpsc::channel::<ipou::Packet>(ipou::CHANNEL_BUFFER_SIZE);
 
     let tun_listener = tokio::spawn(tasks::tun_listener(
         Arc::clone(&dev_arc),
         config_clone,
         runtime_config,
-        etx,
+        tx.clone(),
     ));
     let udp_listener = tokio::spawn(tasks::udp_listener(
         Arc::clone(&sock_arc),
         runtime_config_clone,
-        dtx,
+        tx,
     ));
     let result_coordinator = tokio::spawn(tasks::result_coordinator(
         Arc::clone(&dev_arc),
         Arc::clone(&sock_arc),
-        erx,
-        drx,
+        rx,
     ));
 
     tokio::try_join!(tun_listener, udp_listener, result_coordinator)

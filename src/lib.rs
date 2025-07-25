@@ -19,6 +19,11 @@ pub struct Peer {
     pub pub_key: String,
 }
 
+#[derive(Debug, Clone)]
+pub enum Packet {
+    Decrypted(DecryptedPacket),
+    Encrypted(EncryptedPacket),
+}
 pub type DecryptedPacket = Vec<u8>;
 #[derive(Debug, Clone)]
 pub enum TunMessage {
