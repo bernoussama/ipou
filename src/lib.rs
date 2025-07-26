@@ -10,6 +10,7 @@ pub mod tasks;
 
 // Constants
 pub const MTU: usize = 1420;
+const MAX_UDP_SIZE: usize = (1 << 16) - 1;
 pub const CHANNEL_BUFFER_SIZE: usize = MTU + 512; // Buffered channels
 pub const ENCRYPTION_OVERHEAD: usize = 28; // 12 nonce + 16 auth tag
 

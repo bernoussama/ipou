@@ -1,17 +1,26 @@
 use std::sync::Arc;
 
+use bincode::{
+    config::{self, BigEndian},
+    error,
+};
 use tokio::{
     net::UdpSocket,
     sync::mpsc::{Receiver, Sender},
 };
 use tun::AsyncDevice;
 
-use crate::config::{Config, RuntimeConfig};
+use crate::{
+    MAX_UDP_SIZE,
+    config::{Config, RuntimeConfig},
+    net::{PeerConnections, PeerManager},
+    proto::Packet,
+};
 
 // Spawned listeners
 pub async fn tun_listener(
     dev: Arc<AsyncDevice>,
-    conf_clone: Arc<Config>,
+    peer_connections: PeerConnections,
     runtime_conf: Arc<RuntimeConfig>,
     etx: Sender<crate::EncryptedPacket>,
 ) -> crate::Result<()> {
@@ -25,7 +34,7 @@ pub async fn tun_listener(
             tokio::spawn(crate::net::handle_tun_packet(
                 tun_buf,
                 len,
-                Arc::clone(&conf_clone),
+                Arc::clone(&peer_connections),
                 Arc::clone(&runtime_conf),
                 etx.clone(),
             ));
@@ -37,22 +46,47 @@ pub async fn tun_listener(
 pub async fn udp_listener(
     sock: Arc<UdpSocket>,
     runtime_conf: Arc<RuntimeConfig>,
+    peer_manager: Arc<PeerManager>,
     dtx: Sender<crate::DecryptedPacket>,
 ) -> crate::Result<()> {
-    let mut udp_buf = [0u8; crate::MTU + 512];
+    let mut udp_buf = [0u8; MAX_UDP_SIZE];
     loop {
         // Listen for UDP packets
         let (len, peer_addr) = sock.recv_from(&mut udp_buf).await?;
-        // Spawn handler task for each packet
-        if len >= 28 {
-            // 12 bytes nonce + 16 bytes auth tag
-            tokio::spawn(crate::net::handle_udp_packet(
-                udp_buf,
-                len,
-                peer_addr,
-                Arc::clone(&runtime_conf),
-                dtx.clone(),
-            ));
+        if len > 0 {
+            // let packet_types = std::mem::variant_count::<Packet>(); // unstable feature
+            // match on first byte to determine packet type
+            match udp_buf[0] {
+                0x01..=0x0F => {
+                    if let Ok((packet, _len)) = bincode::decode_from_slice::<Packet, _>(
+                        &udp_buf[..len],
+                        config::standard().with_big_endian(),
+                    ) {
+                        let res = Arc::clone(&peer_manager)
+                            .handle_proto_packet(packet, peer_addr)
+                            .await;
+                    } else {
+                        #[cfg(debug_assertions)]
+                        println!("Received invalid protocol packet from {peer_addr}");
+                    }
+                }
+                0x10 => {
+                    if len >= 30 {
+                        // 12 bytes nonce + 16 bytes auth tag
+                        tokio::spawn(crate::net::handle_udp_packet(
+                            udp_buf,
+                            len,
+                            peer_addr,
+                            Arc::clone(&runtime_conf),
+                            dtx.clone(),
+                        ));
+                    }
+                }
+                _ => {
+                    #[cfg(debug_assertions)]
+                    println!("Received unknown packet type from {peer_addr}");
+                }
+            }
         };
         // Send raw packet + result channel to handler
     }

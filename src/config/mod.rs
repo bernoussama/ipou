@@ -1,20 +1,38 @@
 use std::{
     collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
 use chacha20poly1305::ChaCha20Poly1305;
+use serde::{Deserialize, Serialize};
 
 use crate::Peer;
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
+pub struct PeerConfig {
+    pub public_key: String,
+    pub endpoint: Option<SocketAddr>,
+    pub allowed_ips: Vec<String>,
+    // New fields for protocol
+    pub is_anchor: bool,  // Can this peer act as an anchor?
+    pub persistent: bool, // Should we maintain connection?
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Config {
-    pub name: String,
-    pub address: String,
-    pub port: u16,
-    pub secret: String,
+    pub name: String, // Name of the TUN interface
     pub pubkey: String,
-    pub peers: HashMap<IpAddr, Peer>,
+    pub endpoint: Option<SocketAddr>,
+    pub secret: String,
+    pub peers: Vec<PeerConfig>,
+    pub role: PeerRole,
+    pub keepalive_interval: u64,
+    pub peer_timeout: u64,
+}
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub enum PeerRole {
+    Anchor,  // Can accept incoming connections
+    Dynamic, // Connects to anchors
 }
 
 pub struct RuntimeConfig {
@@ -30,15 +48,20 @@ pub fn load_config(config_path: &str) -> Config {
             eprintln!("No config file found! using defaults.");
             let (private_key, public_key) = crate::crypto::generate_keypair();
 
-            let peers: HashMap<IpAddr, Peer> = HashMap::new();
+            let peers: Vec<PeerConfig> = vec![];
 
             let conf = Config {
                 name: "utun0".to_string(),
-                address: "10.0.0.1".to_string(),
+                endpoint: Some(SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                    1194,
+                )),
                 secret: base64::encode(private_key),
                 pubkey: base64::encode(public_key),
-                port: 1194,
                 peers,
+                role: PeerRole::Dynamic,
+                keepalive_interval: 30, // seconds
+                peer_timeout: 300,      // seconds
             };
             std::fs::write(config_path, serde_yml::to_string(&conf).unwrap())
                 .expect("Failed to write default config file");

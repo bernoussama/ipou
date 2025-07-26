@@ -1,14 +1,105 @@
 use chacha20poly1305::Nonce;
 use chacha20poly1305::aead::Aead;
 use rand::RngCore;
+use std::collections::HashMap;
+use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr};
 use std::{net::SocketAddr, sync::Arc};
+use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 
 use crate::config::{Config, RuntimeConfig};
+use crate::crypto::PublicKeyBytes;
+use crate::proto::Packet;
+use crate::proto::state::PeerConnection;
+
+pub type PeerConnections = Arc<RwLock<HashMap<PublicKeyBytes, PeerConnection>>>;
+
+pub struct PeerManager {
+    pub peer_connections: PeerConnections,
+}
+
+impl PeerManager {
+    pub async fn handle_proto_packet(
+        &self,
+        packet: Packet,
+        sender_addr: SocketAddr,
+    ) -> Option<Packet> {
+        match packet {
+            Packet::HandshakeInit {
+                sender_pubkey,
+                timestamp,
+            } => {
+                let mut peer_connections = self.peer_connections.write().await;
+                let connection = peer_connections
+                    .entry(sender_pubkey)
+                    .or_insert(PeerConnection::new(sender_pubkey));
+                connection.mark_connected(sender_addr);
+
+                // Respond with HandshakeResponse
+                Some(Packet::HandshakeResponse {
+                    success: true,
+                    message: "Handshake successful".to_string(),
+                })
+            }
+            Packet::HandshakeResponse { success, message } => {
+                if success {
+                    #[cfg(debug_assertions)]
+                    println!("Handshake successful: {message}");
+                } else {
+                    #[cfg(debug_assertions)]
+                    eprintln!("Handshake failed: {message}");
+                }
+                None
+            }
+            Packet::RequestPeer { target_pubkey } => {
+                let peer_connections = self.peer_connections.read().await;
+                if let Some(peer) = peer_connections.get(&target_pubkey) {
+                    // Respond with PeerInfo
+                    Some(Packet::PeerInfo {
+                        pubkey: target_pubkey,
+                        endpoint: peer.last_endpoint,
+                        last_seen: peer.last_seen,
+                    })
+                } else {
+                    eprintln!("Peer {} not found!", base64::encode(target_pubkey));
+                    Some(Packet::PeerInfo {
+                        pubkey: target_pubkey,
+                        endpoint: None,
+                        last_seen: 0,
+                    })
+                }
+            }
+            Packet::PeerInfo {
+                pubkey,
+                endpoint,
+                last_seen,
+            } => {
+                #[cfg(debug_assertions)]
+                println!(
+                    "Received PeerInfo for {}: {:?}, last seen: {}",
+                    base64::encode(pubkey),
+                    endpoint,
+                    last_seen
+                );
+                if let Some(endpoint) = endpoint {
+                    // self.initiate_connection(pubkey, endpoint).await;
+                }
+                None
+            }
+
+            Packet::KeepAlive { timestamp } => {
+                #[cfg(debug_assertions)]
+                println!("Received KeepAlive at {timestamp}");
+                None
+            }
+            _ => None,
+        }
+    }
+}
 
 pub async fn handle_udp_packet(
-    udp_buf: [u8; crate::MTU + 512],
+    udp_buf: [u8; crate::MAX_UDP_SIZE],
     len: usize,
     peer_addr: SocketAddr,
     runtime_conf: Arc<RuntimeConfig>,
@@ -45,13 +136,14 @@ pub async fn handle_udp_packet(
 pub async fn handle_tun_packet(
     buf: [u8; crate::MTU],
     len: usize,
-    conf_clone: Arc<Config>,
+    peer_connections: PeerConnections,
     runtime_conf: Arc<RuntimeConfig>,
     etx: mpsc::Sender<crate::EncryptedPacket>,
 ) {
     let mut packet = Vec::with_capacity(crate::MTU + crate::ENCRYPTION_OVERHEAD);
     if let Some(dst_ip) = extract_dst_ip(&buf) {
-        if let Some(peer) = conf_clone.peers.get(&dst_ip) {
+        let pub_key = [0u8; 32]; // Placeholder for public key extraction logic
+        if let Some(peer) = peer_connections.read().await.get(&pub_key) {
             if let Some(cipher) = runtime_conf.ciphers.get(&dst_ip) {
                 let mut nonce_bytes = [0u8; 12];
                 rand::rng().fill_bytes(&mut nonce_bytes);
@@ -64,11 +156,17 @@ pub async fn handle_tun_packet(
                         packet.extend_from_slice(&encrypted);
                         #[cfg(debug_assertions)]
                         println!(
-                            "Sending encrypted packet to {}: {} bytes",
-                            peer.sock_addr,
+                            "Sending encrypted packet to {:?}: {} bytes",
+                            peer.last_endpoint,
                             packet.len()
                         );
-                        if let Err(e) = etx.send((packet.clone(), peer.sock_addr)).await {
+                        if let Err(e) = etx
+                            .send((
+                                packet.clone(),
+                                peer.last_endpoint.expect("last_endpoint is None"),
+                            ))
+                            .await
+                        {
                             #[cfg(debug_assertions)]
                             eprintln!("Error sending encrypted packet through channel: {e}");
                         }
