@@ -1,7 +1,7 @@
 use x25519_dalek::{PublicKey, StaticSecret};
 
-type PrivateKeyBytes = [u8; 32];
-type PublicKeyBytes = [u8; 32];
+pub type PrivateKeyBytes = [u8; 32];
+pub type PublicKeyBytes = [u8; 32];
 
 /// generate a new X25519 keypair ()->(private_key, public_key)
 pub fn generate_keypair() -> (PrivateKeyBytes, PublicKeyBytes) {

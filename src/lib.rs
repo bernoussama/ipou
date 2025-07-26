@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod crypto;
 pub mod net;
+pub mod proto;
 pub mod tasks;
 
 // Constants
