@@ -1,10 +1,10 @@
-# ipou - IP over UDP
+# opentun - IP over UDP VPN
 
-A secure, high-performance IP-over-UDP tunnel implementation written in Rust using async I/O and modern cryptography.
+A secure, high-performance user-space IP-over-UDP tunnel implementation written in Rust using async I/O and modern cryptography.
 
 ## Overview
 
-**ipou** creates a TUN interface that tunnels IP packets over UDP with ChaCha20-Poly1305 encryption. It enables secure communication between peers across networks using Curve25519 key exchange and YAML-based configuration.
+**opentun** creates a TUN interface that tunnels IP packets over UDP with ChaCha20-Poly1305 encryption. It enables secure communication between peers across networks using Curve25519 key exchange and YAML-based configuration.
 
 ## Features
 
@@ -28,8 +28,8 @@ A secure, high-performance IP-over-UDP tunnel implementation written in Rust usi
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/ipou
-cd ipou
+git clone https://github.com/yourusername/opentun
+cd opentun
 cargo build --release
 ```
 
@@ -39,15 +39,15 @@ Generate cryptographic keys for secure communication:
 
 ```bash
 # Generate a private key
-./target/release/ipou genkey
+./target/release/opentun genkey
 
 # Generate public key from private key
-./target/release/ipou pubkey
+./target/release/opentun pubkey
 ```
 
 ### Configuration
 
-Create a `config.yaml` file or let ipou generate a default one:
+Create a `config.yaml` file or let opentun generate a default one:
 
 ```yaml
 name: "utun0"
@@ -65,10 +65,10 @@ peers:
 
 ```bash
 # Run with configuration file (recommended)
-sudo ./target/release/ipou
+sudo ./target/release/opentun
 
 # CLI arguments (legacy support)
-sudo ./target/release/ipou [NAME] [ADDRESS] [PORT]
+sudo ./target/release/opentun [NAME] [ADDRESS] [PORT]
 ```
 
 ### Using the Helper Script
@@ -82,7 +82,7 @@ chmod +x run.sh
 ## Command Line Options
 
 ```
-Usage: ipou [OPTIONS] [NAME] [ADDRESS] [PORT]
+Usage: opentun [OPTIONS] [NAME] [ADDRESS] [PORT]
 
 Arguments:
   [NAME]     TUN interface name (default: from config)
@@ -132,7 +132,7 @@ Peer A (10.0.0.1)                                    Peer B (10.0.0.2)
           │ 1. Read IP packet                                   │ 6. Write decrypted
           ▼                                                     │    IP packet
 ┌─────────────────┐                                   ┌─────────────────┐
-│  ipou Process   │                                   │  ipou Process   │
+│ opentun Process │                                   │ opentun Process │
 │                 │                                   │                 │
 │ ┌─────────────┐ │                                   │ ┌─────────────┐ │
 │ │ Extract     │ │                                   │ │ Decrypt     │ │
@@ -183,9 +183,9 @@ Legend:
 
 ```bash
 # Generate private key
-PRIVATE_A=$(./target/release/ipou genkey)
+PRIVATE_A=$(./target/release/opentun genkey)
 # Generate public key  
-PUBLIC_A=$(echo "$PRIVATE_A" | ./target/release/ipou pubkey)
+PUBLIC_A=$(echo "$PRIVATE_A" | ./target/release/opentun pubkey)
 ```
 
 2. Create config.yaml:
@@ -205,7 +205,7 @@ peers:
 3. Run:
 
 ```bash
-sudo ./target/release/ipou
+sudo ./target/release/opentun
 ```
 
 **Node B:**
@@ -216,7 +216,7 @@ sudo ./target/release/ipou
 
 ### Network Configuration
 
-After starting ipou, configure routing:
+After starting opentun, configure routing:
 
 ```bash
 # Add route for the tunnel network

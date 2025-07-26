@@ -1,30 +1,30 @@
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
-use ipou::cli::commands::{handle_gen_key, handle_pub_key};
-use ipou::config::RuntimeConfig;
+use opentun::cli::commands::{handle_gen_key, handle_pub_key};
+use opentun::config::RuntimeConfig;
 use std::sync::Arc;
 use std::{collections::HashMap, net::Ipv4Addr};
 
 use clap::Parser;
-use ipou::Result;
-use ipou::tasks;
+use opentun::Result;
+use opentun::tasks;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = ipou::cli::Cli::parse();
+    let cli = opentun::cli::Cli::parse();
     // Subcommands
     match &cli.command {
-        Some(ipou::cli::Commands::Genkey {}) => handle_gen_key(),
-        Some(ipou::cli::Commands::Pubkey {}) => handle_pub_key(),
+        Some(opentun::cli::Commands::Genkey {}) => handle_gen_key(),
+        Some(opentun::cli::Commands::Pubkey {}) => handle_pub_key(),
         None => Ok(()),
     }
     .expect("Failed to execute command");
 
     // Load config file
     let config_path = "config.yaml";
-    let conf = ipou::config::load_config(config_path);
+    let conf = opentun::config::load_config(config_path);
     let config = Arc::new(conf);
 
     let config_clone = Arc::clone(&config);
@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
         .tun_name(&config_clone.name)
         .address(config_clone.address.parse::<Ipv4Addr>().unwrap())
         .netmask((255, 255, 255, 0))
-        .mtu(ipou::MTU as u16)
+        .mtu(opentun::MTU as u16)
         .up();
 
     let dev = tun::create_as_async(&tun_config).expect("Failed to create TUN device");
@@ -76,9 +76,9 @@ async fn main() -> Result<()> {
     let sock_arc = Arc::new(sock);
 
     // Create channel for sending decrypted packets to TUN device
-    let (dtx, drx) = mpsc::channel::<ipou::DecryptedPacket>(ipou::CHANNEL_BUFFER_SIZE);
+    let (dtx, drx) = mpsc::channel::<opentun::DecryptedPacket>(opentun::CHANNEL_BUFFER_SIZE);
     // Create channel for sending encrypted packets to UDP socket
-    let (etx, erx) = mpsc::channel::<ipou::EncryptedPacket>(ipou::CHANNEL_BUFFER_SIZE);
+    let (etx, erx) = mpsc::channel::<opentun::EncryptedPacket>(opentun::CHANNEL_BUFFER_SIZE);
 
     let tun_listener = tokio::spawn(tasks::tun_listener(
         Arc::clone(&dev_arc),
