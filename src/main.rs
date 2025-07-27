@@ -1,6 +1,7 @@
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use opentun::cli::commands::{handle_gen_key, handle_pub_key};
 use opentun::config::RuntimeConfig;
+use opentun::proto::Packet;
 use std::sync::Arc;
 use std::{collections::HashMap, net::Ipv4Addr};
 
@@ -77,7 +78,7 @@ async fn main() -> Result<()> {
 
     // Create channel for sending decrypted packets to TUN device
     let (dtx, drx) = mpsc::channel::<opentun::DecryptedPacket>(opentun::CHANNEL_BUFFER_SIZE);
-    // Create channel for sending encrypted packets to UDP socket
+    // Create channel for sending encrypted packets and PROTOCOL packets to UDP socket
     let (etx, erx) = mpsc::channel::<opentun::EncryptedPacket>(opentun::CHANNEL_BUFFER_SIZE);
 
     let tun_listener = tokio::spawn(tasks::tun_listener(
@@ -90,6 +91,7 @@ async fn main() -> Result<()> {
         Arc::clone(&sock_arc),
         runtime_config_clone,
         dtx,
+        etx,
     ));
     let result_coordinator = tokio::spawn(tasks::result_coordinator(
         Arc::clone(&dev_arc),

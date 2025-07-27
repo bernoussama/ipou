@@ -1,6 +1,10 @@
 use std::net::SocketAddr;
 
-use bincode::{Decode, Encode, config::BigEndian};
+use bincode::{
+    Decode, Encode,
+    config::{self, BigEndian},
+    error::DecodeError,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::PublicKeyBytes;
@@ -36,6 +40,33 @@ pub enum Packet {
     VpnData(Vec<u8>),
 }
 
+impl Packet {
+    /// decodes a Packet from network bytes
+    pub fn decode(bytes: &[u8]) -> crate::Result<Self> {
+        match bincode::decode_from_slice::<Packet, _>(bytes, config::standard().with_big_endian()) {
+            Ok((packet, _len)) => Ok(packet),
+            Err(e) => Err(crate::IpouError::DecodeError(e)),
+        }
+    }
+    /// encodes a Packet to network bytes
+    pub fn encode(&self) -> crate::Result<Vec<u8>> {
+        match bincode::encode_to_vec(self, config::standard().with_big_endian()) {
+            Ok(bytes) => Ok(bytes),
+            Err(e) => Err(crate::IpouError::EncodeError(e)),
+        }
+    }
+}
+
+impl WirePacket {
+    /// encodes a WirePacket to network bytes
+    pub fn encode(&self) -> crate::Result<Vec<u8>> {
+        match bincode::encode_to_vec(self, config::standard().with_big_endian()) {
+            Ok(bytes) => Ok(bytes),
+            Err(e) => Err(crate::IpouError::EncodeError(e)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode)]
 pub enum PacketType {
     HandshakeInit = 0x01,
@@ -52,7 +83,7 @@ pub struct WirePacket {
     /// Quick discriminant
     pub packet_type: PacketType,
     /// encrypted Packet
-    pub payload: Vec<u8>,
+    pub payload: Packet,
 }
 
 /// generate a timestamp for the current time

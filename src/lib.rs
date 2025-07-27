@@ -50,6 +50,11 @@ pub enum IpouError {
     InvalidKeyLength(usize),
     #[error("TUN device creation failed: {0}")]
     TunDevice(#[from] tun::Error),
+
+    #[error(" bincode decoding error: {0}")]
+    DecodeError(#[from] bincode::error::DecodeError),
+    #[error(" bincode encoding error: {0}")]
+    EncodeError(#[from] bincode::error::EncodeError),
 }
 
 pub type Result<T> = std::result::Result<T, IpouError>;

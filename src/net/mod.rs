@@ -8,10 +8,11 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 
+use crate::IpouError;
 use crate::config::{Config, RuntimeConfig};
 use crate::crypto::PublicKeyBytes;
-use crate::proto::Packet;
 use crate::proto::state::PeerConnection;
+use crate::proto::{Packet, PacketType, WirePacket};
 
 pub type PeerConnections = Arc<RwLock<HashMap<PublicKeyBytes, PeerConnection>>>;
 
@@ -24,8 +25,9 @@ impl PeerManager {
         &self,
         packet: Packet,
         sender_addr: SocketAddr,
-    ) -> Option<Packet> {
-        match packet {
+        etx: mpsc::Sender<crate::EncryptedPacket>,
+    ) -> crate::Result<()> {
+        if let Some(res) = match packet {
             Packet::HandshakeInit {
                 sender_pubkey,
                 timestamp,
@@ -37,9 +39,12 @@ impl PeerManager {
                 connection.mark_connected(sender_addr);
 
                 // Respond with HandshakeResponse
-                Some(Packet::HandshakeResponse {
-                    success: true,
-                    message: "Handshake successful".to_string(),
+                Some(WirePacket {
+                    packet_type: PacketType::HandshakeResponse,
+                    payload: Packet::HandshakeResponse {
+                        success: true,
+                        message: "Handshake successful".to_string(),
+                    },
                 })
             }
             Packet::HandshakeResponse { success, message } => {
@@ -56,17 +61,23 @@ impl PeerManager {
                 let peer_connections = self.peer_connections.read().await;
                 if let Some(peer) = peer_connections.get(&target_pubkey) {
                     // Respond with PeerInfo
-                    Some(Packet::PeerInfo {
-                        pubkey: target_pubkey,
-                        endpoint: peer.last_endpoint,
-                        last_seen: peer.last_seen,
+                    Some(WirePacket {
+                        packet_type: PacketType::PeerInfo,
+                        payload: Packet::PeerInfo {
+                            pubkey: target_pubkey,
+                            endpoint: peer.last_endpoint,
+                            last_seen: peer.last_seen,
+                        },
                     })
                 } else {
                     eprintln!("Peer {} not found!", base64::encode(target_pubkey));
-                    Some(Packet::PeerInfo {
-                        pubkey: target_pubkey,
-                        endpoint: None,
-                        last_seen: 0,
+                    Some(WirePacket {
+                        packet_type: PacketType::PeerInfo,
+                        payload: Packet::PeerInfo {
+                            pubkey: target_pubkey,
+                            endpoint: None,
+                            last_seen: 0,
+                        },
                     })
                 }
             }
@@ -94,6 +105,17 @@ impl PeerManager {
                 None
             }
             _ => None,
+        } {
+            let packet_bytes = res.encode()?;
+            if let Err(e) = etx.send((packet_bytes.clone(), sender_addr)).await {
+                #[cfg(debug_assertions)]
+                eprintln!("Error sending encrypted packet through channel: {e}");
+                Err(IpouError::Unknown("Sending packet failed".to_string()))
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
         }
     }
 }
