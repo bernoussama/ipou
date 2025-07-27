@@ -108,7 +108,13 @@ impl PeerManager {
             Packet::KeepAlive { timestamp } => {
                 #[cfg(debug_assertions)]
                 println!("Received KeepAlive at {timestamp}");
-                None
+                // Reply with keepalive to maintain NAT mapping
+                Some(WirePacket {
+                    packet_type: PacketType::KeepAlive,
+                    payload: Packet::KeepAlive {
+                        timestamp: crate::proto::now(),
+                    },
+                })
             }
             _ => None,
         } {
