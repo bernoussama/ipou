@@ -41,7 +41,7 @@ pub enum Packet {
 }
 
 impl Packet {
-    /// decodes a Packet from network bytes
+    /// decodes a Protocol Packet from network bytes
     pub fn decode(bytes: &[u8]) -> crate::Result<Self> {
         match bincode::decode_from_slice::<Packet, _>(bytes, config::standard().with_big_endian()) {
             Ok((packet, _len)) => Ok(packet),

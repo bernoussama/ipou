@@ -48,7 +48,7 @@ pub async fn udp_listener(
     runtime_conf: Arc<RuntimeConfig>,
     peer_manager: Arc<PeerManager>,
     dtx: Sender<crate::DecryptedPacket>,
-    etx: Sender<crate::DecryptedPacket>,
+    etx: Sender<crate::EncryptedPacket>,
 ) -> crate::Result<()> {
     let mut udp_buf = [0u8; MAX_UDP_SIZE];
     loop {
@@ -56,13 +56,14 @@ pub async fn udp_listener(
         let (len, peer_addr) = sock.recv_from(&mut udp_buf).await?;
         if len > 0 {
             // let packet_types = std::mem::variant_count::<Packet>(); // unstable feature
+
             // match on first byte to determine packet type
             match udp_buf[0] {
                 0x01..=0x0F => {
                     if let Ok(packet) = Packet::decode(&udp_buf[1..len]) {
-                        let res = Arc::clone(&peer_manager)
-                            .handle_proto_packet(packet, peer_addr)
-                            .await;
+                        Arc::clone(&peer_manager)
+                            .handle_proto_packet(packet, peer_addr, etx.clone())
+                            .await?;
                     } else {
                         #[cfg(debug_assertions)]
                         println!("Received invalid protocol packet from {peer_addr}");
