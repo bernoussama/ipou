@@ -73,8 +73,8 @@ pub async fn udp_listener(
                     if len >= 30 {
                         // 12 bytes nonce + 16 bytes auth tag
                         tokio::spawn(crate::net::handle_udp_packet(
-                            udp_buf,
-                            len,
+                            udp_buf[1..len].try_into().unwrap(), // skip first byte
+                            len - 1,
                             peer_addr,
                             Arc::clone(&runtime_conf),
                             dtx.clone(),

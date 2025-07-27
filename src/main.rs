@@ -3,12 +3,13 @@ use opentun::cli::commands::{handle_gen_key, handle_pub_key};
 use opentun::config::{PeerRole, RuntimeConfig};
 use opentun::crypto::PublicKeyBytes;
 use opentun::proto::Packet;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::{collections::HashMap, net::Ipv4Addr};
 
 use clap::Parser;
-use opentun::Result;
 use opentun::tasks;
+use opentun::{IpouError, Result};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -38,6 +39,10 @@ async fn main() -> Result<()> {
     base64::decode_config_slice(&config.secret, base64::STANDARD, &mut secret_bytes).unwrap();
     let static_secret = StaticSecret::from(secret_bytes);
 
+    let mut ips = HashMap::new();
+
+    let mut ip_to_pubkey = HashMap::new();
+
     for peer_conn in &config.peers {
         let mut pub_key_bytes = [0u8; 32];
         base64::decode_config_slice(&peer_conn.pub_key, base64::STANDARD, &mut pub_key_bytes)
@@ -45,14 +50,36 @@ async fn main() -> Result<()> {
         let pub_key = PublicKey::from(pub_key_bytes);
         let shared_secret = static_secret.diffie_hellman(&pub_key);
         let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
-        shared_secrets.insert(pub_key_bytes, shared_secret.as_bytes().clone());
-        ciphers.insert(peer_conn.endpoint.unwrap(), cipher);
+        shared_secrets.insert(pub_key_bytes, *shared_secret.as_bytes());
+        if let Some(endpoint) = peer_conn.endpoint {
+            ciphers.insert(endpoint, cipher);
+        }
+
+        for allowed_ip in &peer_conn.allowed_ips {
+            if let Ok(ip) = allowed_ip.parse::<IpAddr>() {
+                ips.insert(peer_conn.endpoint.unwrap(), ip);
+                ip_to_pubkey.insert(ip, pub_key_bytes);
+            } else if allowed_ip.contains("/") {
+                let ip_parts = allowed_ip.split('/').next().unwrap();
+                if let Ok(ip) = ip_parts.parse::<IpAddr>() {
+                    ips.insert(peer_conn.endpoint.unwrap(), ip);
+                    ip_to_pubkey.insert(ip, pub_key_bytes);
+                } else {
+                    eprintln!("Invalid IP address format: {allowed_ip}");
+                    continue;
+                }
+            } else {
+                eprintln!("Invalid IP address format: {allowed_ip}");
+                continue;
+            }
+        }
     }
 
     let runtime_config = Arc::new(RuntimeConfig {
         shared_secrets,
         ciphers,
-        ips: HashMap::new(),
+        ips,
+        ip_to_pubkey,
     });
 
     let runtime_config_clone = Arc::clone(&runtime_config);
@@ -72,9 +99,11 @@ async fn main() -> Result<()> {
         .up();
 
     let dev = tun::create_as_async(&tun_config).expect("Failed to create TUN device");
-    let sock = UdpSocket::bind(Arc::clone(&config).endpoint.unwrap())
-        .await
-        .expect("Failed to bind UDP socket");
+    let sock = UdpSocket::bind(Arc::clone(&config).endpoint.ok_or(IpouError::Unknown(
+        "endpoint must be configured in config.yaml".to_string(),
+    ))?)
+    .await
+    .expect("Failed to bind UDP socket");
     println!(
         "UDP socket bound to: {}",
         sock.local_addr().expect("Failed to get local address")

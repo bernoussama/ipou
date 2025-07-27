@@ -166,45 +166,46 @@ pub async fn handle_tun_packet(
 ) {
     let mut packet = Vec::with_capacity(crate::MTU + crate::ENCRYPTION_OVERHEAD);
     if let Some(dst_ip) = extract_dst_ip(&buf) {
-        let pub_key = [0u8; 32]; // Placeholder for public key extraction logic
-        if let Some(peer) = peer_connections.read().await.get(&pub_key) {
-            if let Some(cipher) = runtime_conf.ciphers.get(&peer.last_endpoint.unwrap()) {
-                let mut nonce_bytes = [0u8; 12];
-                rand::rng().fill_bytes(&mut nonce_bytes);
-                let nonce = Nonce::from_slice(&nonce_bytes);
-                let data = &buf[..len];
-                match cipher.encrypt(nonce, data) {
-                    Ok(encrypted) => {
-                        packet.clear();
-                        packet.extend_from_slice(&nonce_bytes); // Include nonce
-                        packet.extend_from_slice(&encrypted);
-                        #[cfg(debug_assertions)]
-                        println!(
-                            "Sending encrypted packet to {:?}: {} bytes",
-                            peer.last_endpoint,
-                            packet.len()
-                        );
-                        if let Err(e) = etx
-                            .send((
-                                packet.clone(),
-                                peer.last_endpoint.expect("last_endpoint is None"),
-                            ))
-                            .await
-                        {
+        if let Some(&pub_key) = runtime_conf.ip_to_pubkey.get(&dst_ip) {
+            if let Some(peer) = peer_connections.read().await.get(&pub_key) {
+                if let Some(cipher) = runtime_conf.ciphers.get(&peer.last_endpoint.unwrap()) {
+                    let mut nonce_bytes = [0u8; 12];
+                    rand::rng().fill_bytes(&mut nonce_bytes);
+                    let nonce = Nonce::from_slice(&nonce_bytes);
+                    let data = &buf[..len];
+                    match cipher.encrypt(nonce, data) {
+                        Ok(encrypted) => {
+                            packet.clear();
+                            packet.extend_from_slice(&nonce_bytes); // Include nonce
+                            packet.extend_from_slice(&encrypted);
                             #[cfg(debug_assertions)]
-                            eprintln!("Error sending encrypted packet through channel: {e}");
+                            println!(
+                                "Sending encrypted packet to {:?}: {} bytes",
+                                peer.last_endpoint,
+                                packet.len()
+                            );
+                            if let Err(e) = etx
+                                .send((
+                                    packet.clone(),
+                                    peer.last_endpoint.expect("last_endpoint is None"),
+                                ))
+                                .await
+                            {
+                                #[cfg(debug_assertions)]
+                                eprintln!("Error sending encrypted packet through channel: {e}");
+                            }
+                        }
+                        Err(_e) => {
+                            #[cfg(debug_assertions)]
+                            eprintln!("Error encrypting packet for destination IP: {dst_ip}");
                         }
                     }
-                    Err(_e) => {
-                        #[cfg(debug_assertions)]
-                        eprintln!("Error encrypting packet for destination IP: {dst_ip}");
-                    }
+                } else {
+                    #[cfg(debug_assertions)]
+                    eprintln!("No cipher found for source IP: {dst_ip}")
                 }
-            } else {
-                #[cfg(debug_assertions)]
-                eprintln!("No cipher found for source IP: {dst_ip}")
             }
-        }
+        } // Placeholder for public key extraction logic
     } else {
         #[cfg(debug_assertions)]
         eprintln!("Failed to extract destination IP from packet");

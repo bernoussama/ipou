@@ -40,6 +40,7 @@ pub struct RuntimeConfig {
     pub shared_secrets: HashMap<PublicKeyBytes, [u8; 32]>,
     pub ciphers: HashMap<SocketAddr, ChaCha20Poly1305>,
     pub ips: HashMap<SocketAddr, IpAddr>,
+    pub ip_to_pubkey: HashMap<IpAddr, PublicKeyBytes>,
 }
 
 pub fn load_config(config_path: &str) -> Config {
