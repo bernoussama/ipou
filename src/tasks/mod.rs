@@ -61,6 +61,8 @@ pub async fn udp_listener(
             match udp_buf[0] {
                 0x01..=0x0F => {
                     if let Ok(packet) = Packet::decode(&udp_buf[1..len]) {
+                        #[cfg(debug_assertions)]
+                        println!("Received protocol packet from {peer_addr}: {packet:?}");
                         Arc::clone(&peer_manager)
                             .handle_proto_packet(packet, peer_addr, etx.clone())
                             .await?;
@@ -71,6 +73,8 @@ pub async fn udp_listener(
                 }
                 0x10 => {
                     if len >= 30 {
+                        #[cfg(debug_assertions)]
+                        println!("Received encrypted packet from {peer_addr}");
                         // 12 bytes nonce + 16 bytes auth tag
                         tokio::spawn(crate::net::handle_udp_packet(
                             udp_buf[1..len].try_into().unwrap(), // skip first byte
@@ -151,6 +155,8 @@ pub async fn keepalive(remote_addr: SocketAddr, sock: Arc<UdpSocket>) -> crate::
         if let Err(e) = sock.send_to(&packet_bytes, remote_addr).await {
             eprintln!("Error sending keepalive packet to {remote_addr}: {e}");
         }
+        #[cfg(debug_assertions)]
+        println!("sent keepalive packet to {remote_addr}");
         tokio::time::sleep(std::time::Duration::from_secs(crate::KEEPALIVE_INTERVAL)).await; // Adjust interval as needed
     }
 }
