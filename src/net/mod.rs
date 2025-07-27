@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 
 use crate::IpouError;
-use crate::config::{Config, RuntimeConfig};
+use crate::config::{Config, PeerRole, RuntimeConfig};
 use crate::crypto::PublicKeyBytes;
 use crate::proto::state::PeerConnection;
 use crate::proto::{Packet, PacketType, WirePacket};
@@ -23,6 +23,7 @@ pub struct PeerManager {
 impl PeerManager {
     pub async fn handle_proto_packet(
         &self,
+        conf: Arc<Config>,
         packet: Packet,
         sender_addr: SocketAddr,
         etx: mpsc::Sender<crate::EncryptedPacket>,
@@ -109,12 +110,21 @@ impl PeerManager {
                 #[cfg(debug_assertions)]
                 println!("Received KeepAlive at {timestamp}");
                 // Reply with keepalive to maintain NAT mapping
-                Some(WirePacket {
-                    packet_type: PacketType::KeepAlive,
-                    payload: Packet::KeepAlive {
-                        timestamp: crate::proto::now(),
-                    },
-                })
+                if conf.role == PeerRole::Anchor {
+                    #[cfg(debug_assertions)]
+                    println!("Anchor peer received KeepAlive from {sender_addr}");
+
+                    Some(WirePacket {
+                        packet_type: PacketType::KeepAlive,
+                        payload: Packet::KeepAlive {
+                            timestamp: crate::proto::now(),
+                        },
+                    })
+                } else {
+                    #[cfg(debug_assertions)]
+                    println!("Regular peer received KeepAlive from {sender_addr}");
+                    None
+                }
             }
             _ => None,
         } {

@@ -126,6 +126,7 @@ async fn main() -> Result<()> {
     tasks.push(tun_listener);
     let udp_listener = tokio::spawn(tasks::udp_listener(
         Arc::clone(&sock_arc),
+        Arc::clone(&config_clone),
         Arc::clone(&runtime_config_clone),
         Arc::clone(&peer_manager),
         dtx.clone(),

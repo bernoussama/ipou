@@ -45,6 +45,7 @@ pub async fn tun_listener(
 
 pub async fn udp_listener(
     sock: Arc<UdpSocket>,
+    conf: Arc<Config>,
     runtime_conf: Arc<RuntimeConfig>,
     peer_manager: Arc<PeerManager>,
     dtx: Sender<crate::DecryptedPacket>,
@@ -64,7 +65,7 @@ pub async fn udp_listener(
                         #[cfg(debug_assertions)]
                         println!("Received protocol packet from {peer_addr}: {packet:?}");
                         Arc::clone(&peer_manager)
-                            .handle_proto_packet(packet, peer_addr, etx.clone())
+                            .handle_proto_packet(Arc::clone(&conf), packet, peer_addr, etx.clone())
                             .await?;
                     } else {
                         #[cfg(debug_assertions)]
