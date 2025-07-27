@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use bincode::{
     config::{self, BigEndian},
@@ -133,5 +133,24 @@ pub async fn result_coordinator(
                        }
                    }
         }
+    }
+}
+
+/// This task sends periodic keepalive packets to the remote peer
+pub async fn keepalive(remote_addr: SocketAddr, sock: Arc<UdpSocket>) -> crate::Result<()> {
+    let keepalive_packet = Packet::KeepAlive {
+        timestamp: crate::proto::now(),
+    };
+    let wire_packet = crate::proto::WirePacket {
+        packet_type: crate::proto::PacketType::KeepAlive,
+        payload: keepalive_packet,
+    };
+
+    loop {
+        let packet_bytes = wire_packet.encode()?;
+        if let Err(e) = sock.send_to(&packet_bytes, remote_addr).await {
+            eprintln!("Error sending keepalive packet to {remote_addr}: {e}");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(crate::KEEPALIVE_INTERVAL)).await; // Adjust interval as needed
     }
 }

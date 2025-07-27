@@ -1,6 +1,7 @@
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use opentun::cli::commands::{handle_gen_key, handle_pub_key};
-use opentun::config::RuntimeConfig;
+use opentun::config::{PeerRole, RuntimeConfig};
+use opentun::crypto::PublicKeyBytes;
 use opentun::proto::Packet;
 use std::sync::Arc;
 use std::{collections::HashMap, net::Ipv4Addr};
@@ -30,7 +31,7 @@ async fn main() -> Result<()> {
 
     let config_clone = Arc::clone(&config);
     // Initialize once after config load
-    let mut shared_secrets = HashMap::new();
+    let mut shared_secrets: HashMap<PublicKeyBytes, _> = HashMap::new();
     let mut ciphers = HashMap::new();
 
     let mut secret_bytes = [0u8; 32];
@@ -44,7 +45,7 @@ async fn main() -> Result<()> {
         let pub_key = PublicKey::from(pub_key_bytes);
         let shared_secret = static_secret.diffie_hellman(&pub_key);
         let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
-        shared_secrets.insert(pub_key_bytes, shared_secret.as_bytes());
+        shared_secrets.insert(pub_key_bytes, shared_secret.as_bytes().clone());
         ciphers.insert(peer_conn.endpoint.unwrap(), cipher);
     }
 
@@ -55,6 +56,12 @@ async fn main() -> Result<()> {
     });
 
     let runtime_config_clone = Arc::clone(&runtime_config);
+
+    // Create peer manager
+    let peer_connections = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+    let peer_manager = Arc::new(opentun::net::PeerManager {
+        peer_connections: peer_connections.clone(),
+    });
 
     let mut tun_config = tun::Configuration::default();
     tun_config
@@ -80,27 +87,44 @@ async fn main() -> Result<()> {
     // Create channel for sending encrypted packets and PROTOCOL packets to UDP socket
     let (etx, erx) = mpsc::channel::<opentun::EncryptedPacket>(opentun::CHANNEL_BUFFER_SIZE);
 
+    let mut tasks = Vec::new();
     let tun_listener = tokio::spawn(tasks::tun_listener(
         Arc::clone(&dev_arc),
-        config_clone,
+        Arc::clone(&peer_connections),
         runtime_config,
-        etx,
+        etx.clone(),
     ));
+    tasks.push(tun_listener);
     let udp_listener = tokio::spawn(tasks::udp_listener(
         Arc::clone(&sock_arc),
         runtime_config_clone,
         peer_manager,
-        dtx,
-        etx,
+        dtx.clone(),
+        etx.clone(),
     ));
+    tasks.push(udp_listener);
     let result_coordinator = tokio::spawn(tasks::result_coordinator(
         Arc::clone(&dev_arc),
         Arc::clone(&sock_arc),
         erx,
         drx,
     ));
+    tasks.push(result_coordinator);
 
-    tokio::try_join!(tun_listener, udp_listener, result_coordinator)
+    // if peer is dynamic, spawn keepalive task
+    if config_clone.role == PeerRole::Dynamic {
+        let anchor_addr = config_clone
+            .peers
+            .iter()
+            .find(|p| p.is_anchor)
+            .and_then(|p| p.endpoint)
+            .expect("No anchor peer found in configuration");
+        let keepalive_task = tokio::spawn(tasks::keepalive(anchor_addr, Arc::clone(&sock_arc)));
+        tasks.push(keepalive_task);
+    }
+
+    futures::future::try_join_all(tasks)
+        .await // Wait for all tasks to complete
         .map(|_| ())
         .expect("Error joining tasks");
 

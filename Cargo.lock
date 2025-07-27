@@ -699,6 +699,7 @@ dependencies = [
  "bincode",
  "chacha20poly1305",
  "clap",
+ "futures",
  "rand",
  "serde",
  "serde_yml",

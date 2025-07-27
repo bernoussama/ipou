@@ -95,6 +95,12 @@ impl PeerManager {
                 );
                 if let Some(endpoint) = endpoint {
                     // self.initiate_connection(pubkey, endpoint).await;
+                    self.peer_connections
+                        .write()
+                        .await
+                        .entry(pubkey)
+                        .or_insert(PeerConnection::new(pubkey))
+                        .mark_connected(endpoint);
                 }
                 None
             }
@@ -131,27 +137,23 @@ pub async fn handle_udp_packet(
     let nonce = Nonce::from_slice(&udp_buf[..12]);
     let encrypted_data = &udp_buf[12..len];
 
-    if let Some(ip) = runtime_conf.ips.get(&peer_addr) {
-        if let Some(cipher) = runtime_conf.ciphers.get(ip) {
-            match cipher.decrypt(nonce, encrypted_data) {
-                Ok(decrypted) => {
-                    if decrypted.len() >= 20 {
-                        if let Err(e) = dtx.send(decrypted).await {
-                            eprintln!("Error sending decrypted packet through channel: {e}");
-                        }
-                    } else {
-                        eprintln!("Decrypted packet too short: {} bytes", decrypted.len());
+    if let Some(cipher) = runtime_conf.ciphers.get(&peer_addr) {
+        match cipher.decrypt(nonce, encrypted_data) {
+            Ok(decrypted) => {
+                if decrypted.len() >= 20 {
+                    if let Err(e) = dtx.send(decrypted).await {
+                        eprintln!("Error sending decrypted packet through channel: {e}");
                     }
-                }
-                Err(e) => {
-                    eprintln!("Decryption failed for peer {ip}: {e}");
+                } else {
+                    eprintln!("Decrypted packet too short: {} bytes", decrypted.len());
                 }
             }
-        } else {
-            eprintln!("No cipher found for peer: {ip}");
+            Err(e) => {
+                eprintln!("Decryption failed for peer {peer_addr:?}: {e}");
+            }
         }
     } else {
-        eprintln!("No IP found for peer address: {peer_addr}");
+        eprintln!("No cipher found for peer: {peer_addr:?}");
     }
 }
 
@@ -166,7 +168,7 @@ pub async fn handle_tun_packet(
     if let Some(dst_ip) = extract_dst_ip(&buf) {
         let pub_key = [0u8; 32]; // Placeholder for public key extraction logic
         if let Some(peer) = peer_connections.read().await.get(&pub_key) {
-            if let Some(cipher) = runtime_conf.ciphers.get(&dst_ip) {
+            if let Some(cipher) = runtime_conf.ciphers.get(&peer.last_endpoint.unwrap()) {
                 let mut nonce_bytes = [0u8; 12];
                 rand::rng().fill_bytes(&mut nonce_bytes);
                 let nonce = Nonce::from_slice(&nonce_bytes);
