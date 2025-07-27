@@ -222,7 +222,10 @@ pub async fn handle_tun_packet(
                     eprintln!("No cipher found for source IP: {dst_ip}")
                 }
             }
-        } // Placeholder for public key extraction logic
+        } else {
+            #[cfg(debug_assertions)]
+            println!("No public key found for destination IP: {dst_ip}");
+        }
     } else {
         #[cfg(debug_assertions)]
         eprintln!("Failed to extract destination IP from packet");

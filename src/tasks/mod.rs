@@ -170,7 +170,6 @@ pub async fn handshake(
 ) -> crate::Result<()> {
     #[cfg(debug_assertions)]
     println!("Starting handshake...");
-    let public_key = config.pubkey.clone();
     let mut pubkey_bytes = [0u8; 32];
     base64::decode_config_slice(&config.pubkey, base64::STANDARD, &mut pubkey_bytes)?;
     let handshake_packet = Packet::HandshakeInit {
