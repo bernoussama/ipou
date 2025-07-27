@@ -6,11 +6,11 @@ use std::{
 use chacha20poly1305::ChaCha20Poly1305;
 use serde::{Deserialize, Serialize};
 
-use crate::Peer;
+use crate::{Peer, crypto::PublicKeyBytes};
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
 pub struct PeerConfig {
-    pub public_key: String,
+    pub pub_key: String,
     pub endpoint: Option<SocketAddr>,
     pub allowed_ips: Vec<String>,
     // New fields for protocol
@@ -22,6 +22,7 @@ pub struct PeerConfig {
 pub struct Config {
     pub name: String, // Name of the TUN interface
     pub pubkey: String,
+    pub address: String, // Local IP address for the TUN interface
     pub endpoint: Option<SocketAddr>,
     pub secret: String,
     pub peers: Vec<PeerConfig>,
@@ -36,8 +37,8 @@ pub enum PeerRole {
 }
 
 pub struct RuntimeConfig {
-    pub shared_secrets: HashMap<IpAddr, [u8; 32]>,
-    pub ciphers: HashMap<IpAddr, ChaCha20Poly1305>,
+    pub shared_secrets: HashMap<PublicKeyBytes, [u8; 32]>,
+    pub ciphers: HashMap<SocketAddr, ChaCha20Poly1305>,
     pub ips: HashMap<SocketAddr, IpAddr>,
 }
 
@@ -52,10 +53,8 @@ pub fn load_config(config_path: &str) -> Config {
 
             let conf = Config {
                 name: "utun0".to_string(),
-                endpoint: Some(SocketAddr::new(
-                    IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-                    1194,
-                )),
+                endpoint: Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 1194)),
+                address: "10.0.0.1".to_string(),
                 secret: base64::encode(private_key),
                 pubkey: base64::encode(public_key),
                 peers,

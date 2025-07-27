@@ -37,22 +37,21 @@ async fn main() -> Result<()> {
     base64::decode_config_slice(&config.secret, base64::STANDARD, &mut secret_bytes).unwrap();
     let static_secret = StaticSecret::from(secret_bytes);
 
-    let mut ips = HashMap::new();
-    for (ip, peer) in &config.peers {
+    for peer_conn in &config.peers {
         let mut pub_key_bytes = [0u8; 32];
-        base64::decode_config_slice(&peer.pub_key, base64::STANDARD, &mut pub_key_bytes).unwrap();
+        base64::decode_config_slice(&peer_conn.pub_key, base64::STANDARD, &mut pub_key_bytes)
+            .unwrap();
         let pub_key = PublicKey::from(pub_key_bytes);
         let shared_secret = static_secret.diffie_hellman(&pub_key);
         let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
-        shared_secrets.insert(*ip, *shared_secret.as_bytes());
-        ciphers.insert(*ip, cipher);
-        ips.insert(peer.sock_addr, *ip);
+        shared_secrets.insert(pub_key_bytes, shared_secret.as_bytes());
+        ciphers.insert(peer_conn.endpoint.unwrap(), cipher);
     }
 
     let runtime_config = Arc::new(RuntimeConfig {
         shared_secrets,
         ciphers,
-        ips,
+        ips: HashMap::new(),
     });
 
     let runtime_config_clone = Arc::clone(&runtime_config);
@@ -66,7 +65,7 @@ async fn main() -> Result<()> {
         .up();
 
     let dev = tun::create_as_async(&tun_config).expect("Failed to create TUN device");
-    let sock = UdpSocket::bind(format!("0.0.0.0:{}", Arc::clone(&config).port))
+    let sock = UdpSocket::bind(Arc::clone(&config).endpoint.unwrap())
         .await
         .expect("Failed to bind UDP socket");
     println!(
