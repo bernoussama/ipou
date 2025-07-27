@@ -50,7 +50,13 @@ pub fn load_config(config_path: &str) -> Config {
             eprintln!("No config file found! using defaults.");
             let (private_key, public_key) = crate::crypto::generate_keypair();
 
-            let peers: Vec<PeerConfig> = vec![];
+            let peers: Vec<PeerConfig> = vec![PeerConfig {
+                pub_key: base64::encode(public_key),
+                endpoint: Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 1194)),
+                is_anchor: true,
+                persistent: true,
+                allowed_ips: vec!["10.0.0.5".to_string()],
+            }];
 
             let conf = Config {
                 name: "utun0".to_string(),
