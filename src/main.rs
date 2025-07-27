@@ -126,8 +126,8 @@ async fn main() -> Result<()> {
     tasks.push(tun_listener);
     let udp_listener = tokio::spawn(tasks::udp_listener(
         Arc::clone(&sock_arc),
-        runtime_config_clone,
-        peer_manager,
+        Arc::clone(&runtime_config_clone),
+        Arc::clone(&peer_manager),
         dtx.clone(),
         etx.clone(),
     ));
@@ -142,6 +142,13 @@ async fn main() -> Result<()> {
 
     // if peer is dynamic, spawn keepalive task
     if config_clone.role == PeerRole::Dynamic {
+        let handshake_task = tokio::spawn(tasks::handshake(
+            Arc::clone(&sock_arc),
+            Arc::clone(&config_clone),
+            Arc::clone(&runtime_config_clone),
+            Arc::clone(&peer_manager),
+        ));
+        tasks.push(handshake_task);
         let anchor_addr = config_clone
             .peers
             .iter()

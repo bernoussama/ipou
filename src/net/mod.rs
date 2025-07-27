@@ -176,6 +176,7 @@ pub async fn handle_tun_packet(
                     match cipher.encrypt(nonce, data) {
                         Ok(encrypted) => {
                             packet.clear();
+                            packet.push(0x10); // Protocol packet type
                             packet.extend_from_slice(&nonce_bytes); // Include nonce
                             packet.extend_from_slice(&encrypted);
                             #[cfg(debug_assertions)]

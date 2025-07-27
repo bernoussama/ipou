@@ -154,3 +154,56 @@ pub async fn keepalive(remote_addr: SocketAddr, sock: Arc<UdpSocket>) -> crate::
         tokio::time::sleep(std::time::Duration::from_secs(crate::KEEPALIVE_INTERVAL)).await; // Adjust interval as needed
     }
 }
+/// task to initiate a handshake with the anchor peer
+pub async fn handshake(
+    sock: Arc<UdpSocket>,
+    config: Arc<Config>,
+    runtime_conf: Arc<RuntimeConfig>,
+    peer_manager: Arc<PeerManager>,
+) -> crate::Result<()> {
+    #[cfg(debug_assertions)]
+    println!("Starting handshake...");
+    let public_key = config.pubkey.clone();
+    let mut pubkey_bytes = [0u8; 32];
+    base64::decode_config_slice(&config.pubkey, base64::STANDARD, &mut pubkey_bytes)?;
+    let handshake_packet = Packet::HandshakeInit {
+        sender_pubkey: pubkey_bytes,
+        timestamp: crate::proto::now(),
+    };
+    let wire_packet = crate::proto::WirePacket {
+        packet_type: crate::proto::PacketType::HandshakeInit,
+        payload: handshake_packet,
+    };
+
+    // check if every anchor peer is connected
+    loop {
+        // Send handshake packet to each anchor peer
+        for peer in &config.peers {
+            if let Some(endpoint) = peer.endpoint {
+                let packet_bytes = wire_packet.encode()?;
+                if let Err(e) = sock.send_to(&packet_bytes, endpoint).await {
+                    eprintln!("Error sending handshake packet to {}: {e}", endpoint);
+                } else {
+                    #[cfg(debug_assertions)]
+                    println!("Sent handshake packet to {}", endpoint);
+                }
+            }
+        }
+
+        let all_connected = peer_manager
+            .peer_connections
+            .read()
+            .await
+            .values()
+            .all(|conn| conn.is_connected());
+        if all_connected {
+            #[cfg(debug_assertions)]
+            println!("All anchor peers are connected.");
+            break;
+        }
+        // Wait before sending again
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+
+    Ok(())
+}
