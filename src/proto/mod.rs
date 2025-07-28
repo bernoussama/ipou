@@ -174,6 +174,30 @@ mod tests {
     }
 
     #[test]
+    fn test_packet_decode_invalid_data() {
+        let invalid_data = vec![0xff, 0xfe, 0xfd]; // Invalid bincode data
+        let result = Packet::decode(&invalid_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_packet_encode_decode_keep_alive() {
+        let packet = Packet::KeepAlive {
+            timestamp: 1111111111,
+        };
+
+        let encoded = packet.encode().expect("Failed to encode packet");
+        let decoded = Packet::decode(&encoded).expect("Failed to decode packet");
+
+        match decoded {
+            Packet::KeepAlive { timestamp } => {
+                assert_eq!(timestamp, 1111111111);
+            }
+            _ => panic!("Decoded packet type mismatch"),
+        }
+    }
+
+    #[test]
     fn test_wire_handshake_init() {
         let initial_sender_pubkey = [1u8; 32];
         let initial_timestamp = now();
@@ -216,6 +240,37 @@ mod tests {
         let result = WirePacket::decode(&empty_data);
         println!("decoded empty data result: {result:#?}");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_packet_type_try_from() {
+        assert_eq!(
+            PacketType::try_from(0x01).unwrap() as u8,
+            PacketType::HandshakeInit as u8
+        );
+        assert_eq!(
+            PacketType::try_from(0x02).unwrap() as u8,
+            PacketType::HandshakeResponse as u8
+        );
+        assert_eq!(
+            PacketType::try_from(0x03).unwrap() as u8,
+            PacketType::RequestPeer as u8
+        );
+        assert_eq!(
+            PacketType::try_from(0x04).unwrap() as u8,
+            PacketType::PeerInfo as u8
+        );
+        assert_eq!(
+            PacketType::try_from(0x05).unwrap() as u8,
+            PacketType::KeepAlive as u8
+        );
+        assert_eq!(
+            PacketType::try_from(0x10).unwrap() as u8,
+            PacketType::VpnData as u8
+        );
+
+        // Test invalid packet type
+        assert!(PacketType::try_from(0x99).is_err());
     }
 
     #[test]
