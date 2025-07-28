@@ -56,6 +56,9 @@ pub enum IpouError {
     DecodeError(#[from] bincode::error::DecodeError),
     #[error(" bincode encoding error: {0}")]
     EncodeError(#[from] bincode::error::EncodeError),
+
+    #[error(" invalid packet type error: {0}")]
+    InvalidPacketType(u8),
 }
 
 pub type Result<T> = std::result::Result<T, IpouError>;
