@@ -201,19 +201,22 @@ mod tests {
     fn test_wire_handshake_init() {
         let initial_sender_pubkey = [1u8; 32];
         let initial_timestamp = now();
+
         let payload = Packet::HandshakeInit {
             sender_pubkey: initial_sender_pubkey,
             timestamp: initial_timestamp,
         };
+
         let wire_packet = WirePacket {
             packet_type: PacketType::HandshakeInit,
             payload,
         };
+
         let encoded = wire_packet
             .encode()
             .expect("Failed to encode HandshakeInit wire packet");
-        println!("encoded : {encoded:#?}");
         let decoded = WirePacket::decode(&encoded).expect("Failed to decode HandshakeInit packet");
+
         assert_eq!(decoded.packet_type as u8, PacketType::HandshakeInit as u8);
         match decoded.payload {
             Packet::HandshakeInit {

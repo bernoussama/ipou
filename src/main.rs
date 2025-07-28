@@ -1,7 +1,9 @@
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
+use futures::lock;
 use opentun::cli::commands::{handle_gen_key, handle_pub_key};
 use opentun::config::{PeerRole, RuntimeConfig};
 use opentun::crypto::PublicKeyBytes;
+use opentun::net::PeerConnections;
 use opentun::proto::Packet;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -11,7 +13,7 @@ use clap::Parser;
 use opentun::tasks;
 use opentun::{IpouError, Result};
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
+use tokio::sync::{RwLock, mpsc};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 #[tokio::main]
@@ -75,20 +77,18 @@ async fn main() -> Result<()> {
         }
     }
 
-    let runtime_config = Arc::new(RuntimeConfig {
+    let runtime_config = RuntimeConfig {
         shared_secrets,
         ciphers,
         ips,
         ip_to_pubkey,
-    });
+    };
 
-    let runtime_config_clone = Arc::clone(&runtime_config);
+    let locked_runtime_conf = Arc::new(RwLock::new(runtime_config));
 
     // Create peer manager
-    let peer_connections = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-    let peer_manager = Arc::new(opentun::net::PeerManager {
-        peer_connections: peer_connections.clone(),
-    });
+    let (config_update_tx, config_update_rx) = mpsc::unbounded_channel();
+    let peer_manager = Arc::new(opentun::net::PeerManager::new(config_update_tx));
 
     let mut tun_config = tun::Configuration::default();
     tun_config
@@ -119,15 +119,15 @@ async fn main() -> Result<()> {
     let mut tasks = Vec::new();
     let tun_listener = tokio::spawn(tasks::tun_listener(
         Arc::clone(&dev_arc),
-        Arc::clone(&peer_connections),
-        runtime_config,
+        Arc::clone(&peer_manager.peer_connections),
+        Arc::clone(&locked_runtime_conf),
         etx.clone(),
     ));
     tasks.push(tun_listener);
     let udp_listener = tokio::spawn(tasks::udp_listener(
         Arc::clone(&sock_arc),
         Arc::clone(&config_clone),
-        Arc::clone(&runtime_config_clone),
+        Arc::clone(&locked_runtime_conf),
         Arc::clone(&peer_manager),
         dtx.clone(),
         etx.clone(),
@@ -141,12 +141,22 @@ async fn main() -> Result<()> {
     ));
     tasks.push(result_coordinator);
 
+    // Spawn the config updater task
+    let config_updater_handle = tokio::spawn(crate::tasks::config_updater(
+        config_update_rx,
+        Arc::clone(&config),
+        Arc::clone(&locked_runtime_conf),
+        config_path.to_string(),
+        Arc::clone(&peer_manager),
+    ));
+    tasks.push(config_updater_handle);
+
     // if peer is dynamic, spawn keepalive task
     if config_clone.role == PeerRole::Dynamic {
         let handshake_task = tokio::spawn(tasks::handshake(
             Arc::clone(&sock_arc),
             Arc::clone(&config_clone),
-            Arc::clone(&runtime_config_clone),
+            Arc::clone(&locked_runtime_conf),
             Arc::clone(&peer_manager),
         ));
         tasks.push(handshake_task);

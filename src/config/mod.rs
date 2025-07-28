@@ -6,7 +6,27 @@ use std::{
 use chacha20poly1305::ChaCha20Poly1305;
 use serde::{Deserialize, Serialize};
 
-use crate::{Peer, crypto::PublicKeyBytes};
+use crate::{Peer, crypto::PublicKeyBytes, proto::state::PeerState};
+
+use tokio::sync::mpsc;
+
+#[derive(Debug, Clone, Copy)]
+pub enum ConfigUpdateEvent {
+    PeerConnected {
+        pubkey: PublicKeyBytes,
+        endpoint: SocketAddr,
+    },
+    PeerDisconnected {
+        pubkey: PublicKeyBytes,
+    },
+    PeerStateChanged {
+        pubkey: PublicKeyBytes,
+        state: PeerState,
+    },
+}
+
+pub type ConfigUpdateSender = mpsc::UnboundedSender<ConfigUpdateEvent>;
+pub type ConfigUpdateReceiver = mpsc::UnboundedReceiver<ConfigUpdateEvent>;
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
 pub struct PeerConfig {

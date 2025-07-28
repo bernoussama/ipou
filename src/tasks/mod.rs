@@ -1,14 +1,19 @@
 use std::{net::SocketAddr, sync::Arc};
 
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use tokio::{
     net::UdpSocket,
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        RwLock,
+        mpsc::{Receiver, Sender},
+    },
 };
 use tun::AsyncDevice;
 
 use crate::{
     MAX_UDP_SIZE,
-    config::{Config, RuntimeConfig},
+    config::{Config, ConfigUpdateEvent, ConfigUpdateReceiver, RuntimeConfig},
+    crypto::PublicKeyBytes,
     net::{PeerConnections, PeerManager},
     proto::Packet,
 };
@@ -17,7 +22,7 @@ use crate::{
 pub async fn tun_listener(
     dev: Arc<AsyncDevice>,
     peer_connections: PeerConnections,
-    runtime_conf: Arc<RuntimeConfig>,
+    runtime_conf: Arc<RwLock<RuntimeConfig>>,
     etx: Sender<crate::EncryptedPacket>,
 ) -> crate::Result<()> {
     let mut tun_buf = [0u8; crate::MTU];
@@ -42,7 +47,7 @@ pub async fn tun_listener(
 pub async fn udp_listener(
     sock: Arc<UdpSocket>,
     conf: Arc<Config>,
-    runtime_conf: Arc<RuntimeConfig>,
+    runtime_conf: Arc<RwLock<RuntimeConfig>>,
     peer_manager: Arc<PeerManager>,
     dtx: Sender<crate::DecryptedPacket>,
     etx: Sender<crate::EncryptedPacket>,
@@ -161,7 +166,7 @@ pub async fn keepalive(remote_addr: SocketAddr, sock: Arc<UdpSocket>) -> crate::
 pub async fn handshake(
     sock: Arc<UdpSocket>,
     config: Arc<Config>,
-    runtime_conf: Arc<RuntimeConfig>,
+    runtime_conf: Arc<RwLock<RuntimeConfig>>,
     peer_manager: Arc<PeerManager>,
 ) -> crate::Result<()> {
     #[cfg(debug_assertions)]
@@ -206,6 +211,86 @@ pub async fn handshake(
         // Wait before sending again
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
+
+    Ok(())
+}
+
+pub async fn config_updater(
+    mut update_rx: ConfigUpdateReceiver,
+    config: Arc<Config>,
+    runtime_config: Arc<RwLock<RuntimeConfig>>,
+    config_path: String,
+    peer_manager: Arc<PeerManager>,
+) -> crate::Result<()> {
+    while let Some(event) = update_rx.recv().await {
+        match event {
+            ConfigUpdateEvent::PeerConnected { pubkey, endpoint } => {
+                // Update runtime config with new cipher if needed
+                if let Some(shared_secret) = runtime_config.read().await.shared_secrets.get(&pubkey)
+                {
+                    let cipher = ChaCha20Poly1305::new(shared_secret.into());
+                    runtime_config
+                        .write()
+                        .await
+                        .ciphers
+                        .insert(endpoint, cipher);
+                }
+
+                // Update persistent config file
+                if let Err(e) = update_config_file(&config_path, &pubkey, Some(endpoint)).await {
+                    eprintln!("Failed to update config file: {e}");
+                }
+            }
+            ConfigUpdateEvent::PeerDisconnected { pubkey } => {
+                // Remove from runtime config
+                if let Some(peer) = peer_manager.peer_connections.read().await.get(&pubkey) {
+                    if let Some(endpoint) = peer.last_endpoint {
+                        runtime_config.write().await.ciphers.remove(&endpoint);
+                    }
+                }
+
+                // Update persistent config file
+                if let Err(e) = update_config_file(&config_path, &pubkey, None).await {
+                    eprintln!("Failed to update config file: {e}");
+                }
+            }
+            ConfigUpdateEvent::PeerStateChanged { pubkey, state } => {
+                // Handle state changes as needed
+                #[cfg(debug_assertions)]
+                println!(
+                    "Peer {} state changed to {:?}",
+                    base64::encode(pubkey),
+                    state
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn update_config_file(
+    config_path: &str,
+    pubkey: &PublicKeyBytes,
+    endpoint: Option<SocketAddr>,
+) -> crate::Result<()> {
+    // Read current config
+    let mut config: Config = {
+        let content = tokio::fs::read_to_string(config_path).await?;
+        serde_yml::from_str(&content)?
+    };
+
+    // Find and update the peer
+    let pubkey_str = base64::encode(pubkey);
+    if let Some(peer_config) = config.peers.iter_mut().find(|p| p.pub_key == pubkey_str) {
+        peer_config.endpoint = endpoint;
+    }
+
+    // Write back to file
+    let updated_content = serde_yml::to_string(&config)?;
+    tokio::fs::write(config_path, updated_content).await?;
+
+    #[cfg(debug_assertions)]
+    println!("Updated config file for peer {}", pubkey_str);
 
     Ok(())
 }

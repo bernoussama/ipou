@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 
 use crate::IpouError;
-use crate::config::{Config, PeerRole, RuntimeConfig};
+use crate::config::{Config, ConfigUpdateSender, PeerRole, RuntimeConfig};
 use crate::crypto::PublicKeyBytes;
 use crate::proto::state::PeerConnection;
 use crate::proto::{Packet, PacketType, WirePacket};
@@ -18,9 +18,16 @@ pub type PeerConnections = Arc<RwLock<HashMap<PublicKeyBytes, PeerConnection>>>;
 
 pub struct PeerManager {
     pub peer_connections: PeerConnections,
+    pub config_update_tx: ConfigUpdateSender,
 }
 
 impl PeerManager {
+    pub fn new(config_update_tx: ConfigUpdateSender) -> Self {
+        Self {
+            peer_connections: Arc::new(RwLock::new(HashMap::new())),
+            config_update_tx,
+        }
+    }
     pub async fn handle_proto_packet(
         &self,
         conf: Arc<Config>,
@@ -35,9 +42,12 @@ impl PeerManager {
                 timestamp,
             } => {
                 let mut peer_connections = self.peer_connections.write().await;
-                let connection = peer_connections
-                    .entry(sender_pubkey)
-                    .or_insert(PeerConnection::new(sender_pubkey));
+                let connection = peer_connections.entry(sender_pubkey).or_insert(
+                    PeerConnection::with_update_sender(
+                        sender_pubkey,
+                        self.config_update_tx.clone(),
+                    ),
+                );
                 connection.mark_connected(sender_addr);
                 connection.last_seen = timestamp;
 
@@ -148,14 +158,14 @@ pub async fn handle_udp_packet(
     udp_buf: [u8; crate::MAX_UDP_SIZE],
     len: usize,
     peer_addr: SocketAddr,
-    runtime_conf: Arc<RuntimeConfig>,
+    runtime_conf: Arc<RwLock<RuntimeConfig>>,
     dtx: mpsc::Sender<crate::DecryptedPacket>,
 ) {
     // Extract nonce and encrypted data
     let nonce = Nonce::from_slice(&udp_buf[..12]);
     let encrypted_data = &udp_buf[12..len];
 
-    if let Some(cipher) = runtime_conf.ciphers.get(&peer_addr) {
+    if let Some(cipher) = runtime_conf.read().await.ciphers.get(&peer_addr) {
         match cipher.decrypt(nonce, encrypted_data) {
             Ok(decrypted) => {
                 if decrypted.len() >= 20 {
@@ -179,14 +189,19 @@ pub async fn handle_tun_packet(
     buf: [u8; crate::MTU],
     len: usize,
     peer_connections: PeerConnections,
-    runtime_conf: Arc<RuntimeConfig>,
+    runtime_conf: Arc<RwLock<RuntimeConfig>>,
     etx: mpsc::Sender<crate::EncryptedPacket>,
 ) {
     let mut packet = Vec::with_capacity(crate::MTU + crate::ENCRYPTION_OVERHEAD);
     if let Some(dst_ip) = extract_dst_ip(&buf) {
-        if let Some(&pub_key) = runtime_conf.ip_to_pubkey.get(&dst_ip) {
+        if let Some(&pub_key) = runtime_conf.read().await.ip_to_pubkey.get(&dst_ip) {
             if let Some(peer) = peer_connections.read().await.get(&pub_key) {
-                if let Some(cipher) = runtime_conf.ciphers.get(&peer.last_endpoint.unwrap()) {
+                if let Some(cipher) = runtime_conf
+                    .read()
+                    .await
+                    .ciphers
+                    .get(&peer.last_endpoint.unwrap())
+                {
                     let mut nonce_bytes = [0u8; 12];
                     rand::rng().fill_bytes(&mut nonce_bytes);
                     let nonce = Nonce::from_slice(&nonce_bytes);
