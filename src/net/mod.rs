@@ -28,6 +28,7 @@ impl PeerManager {
         sender_addr: SocketAddr,
         etx: mpsc::Sender<crate::EncryptedPacket>,
     ) -> crate::Result<()> {
+        // if there is a response
         if let Some(res) = match packet {
             Packet::HandshakeInit {
                 sender_pubkey,
@@ -38,6 +39,7 @@ impl PeerManager {
                     .entry(sender_pubkey)
                     .or_insert(PeerConnection::new(sender_pubkey));
                 connection.mark_connected(sender_addr);
+                connection.last_seen = timestamp;
 
                 // Respond with HandshakeResponse
                 Some(WirePacket {
