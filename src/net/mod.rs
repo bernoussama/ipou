@@ -31,6 +31,7 @@ impl PeerManager {
     pub async fn handle_proto_packet(
         &self,
         conf: Arc<Config>,
+        runtime_conf: Arc<RwLock<RuntimeConfig>>,
         packet: Packet,
         sender_addr: SocketAddr,
         etx: mpsc::Sender<crate::EncryptedPacket>,
@@ -64,6 +65,26 @@ impl PeerManager {
                 if success {
                     #[cfg(debug_assertions)]
                     println!("Handshake successful: {message}");
+                    let sender_pubkey = runtime_conf
+                        .read()
+                        .await
+                        .ip_to_pubkey
+                        .get(
+                            &runtime_conf
+                                .read()
+                                .await
+                                .ips
+                                .get(&sender_addr)
+                                .copied()
+                                .unwrap(),
+                        )
+                        .copied()
+                        .unwrap();
+                    let mut peer_connections = self.peer_connections.write().await;
+
+                    let connection = peer_connections.get_mut(&sender_pubkey).unwrap();
+                    connection.mark_connected(sender_addr);
+                    connection.last_seen = crate::proto::now();
                 } else {
                     #[cfg(debug_assertions)]
                     eprintln!("Handshake failed: {message}");
