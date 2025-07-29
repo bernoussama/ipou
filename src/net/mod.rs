@@ -253,6 +253,12 @@ pub async fn handle_tun_packet(
                     #[cfg(debug_assertions)]
                     eprintln!("No cipher found for source IP: {dst_ip}")
                 }
+            } else {
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "No peer connection found for destination IP: {dst_ip}, Public Key: {}",
+                    base64::encode(pub_key)
+                );
             }
         } else {
             #[cfg(debug_assertions)]
