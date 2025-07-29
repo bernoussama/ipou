@@ -103,7 +103,13 @@ pub async fn udp_listener(
                             "[UDP_LISTENER] Received protocol packet from {peer_addr}: {packet:?}"
                         );
                         Arc::clone(&peer_manager)
-                            .handle_proto_packet(Arc::clone(&conf), packet, peer_addr, etx.clone())
+                            .handle_proto_packet(
+                                Arc::clone(&conf),
+                                Arc::clone(&runtime_conf),
+                                packet,
+                                peer_addr,
+                                etx.clone(),
+                            )
                             .await?;
                     } else {
                         #[cfg(debug_assertions)]
