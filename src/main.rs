@@ -45,6 +45,10 @@ async fn main() -> Result<()> {
 
     let mut ip_to_pubkey = HashMap::new();
 
+    // Create peer manager
+    let (config_update_tx, config_update_rx) = mpsc::unbounded_channel();
+    let peer_manager = Arc::new(opentun::net::PeerManager::new(config_update_tx.clone()));
+
     for peer_conn in &config.peers {
         let mut pub_key_bytes = [0u8; 32];
         base64::decode_config_slice(&peer_conn.pub_key, base64::STANDARD, &mut pub_key_bytes)
@@ -75,6 +79,18 @@ async fn main() -> Result<()> {
                 continue;
             }
         }
+
+        // Add peer to peer_manager if it has an endpoint
+        if let Some(endpoint) = peer_conn.endpoint {
+            let mut peer_connections = peer_manager.peer_connections.write().await;
+            let peer_connection = peer_connections.entry(pub_key_bytes).or_insert(
+                opentun::proto::state::PeerConnection::with_update_sender(
+                    pub_key_bytes,
+                    config_update_tx.clone(),
+                ),
+            );
+            peer_connection.mark_connected(endpoint);
+        }
     }
 
     let runtime_config = RuntimeConfig {
@@ -85,10 +101,6 @@ async fn main() -> Result<()> {
     };
 
     let locked_runtime_conf = Arc::new(RwLock::new(runtime_config));
-
-    // Create peer manager
-    let (config_update_tx, config_update_rx) = mpsc::unbounded_channel();
-    let peer_manager = Arc::new(opentun::net::PeerManager::new(config_update_tx));
 
     let mut tun_config = tun::Configuration::default();
     tun_config
