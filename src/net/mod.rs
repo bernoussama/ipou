@@ -195,13 +195,28 @@ pub async fn handle_tun_packet(
     let mut packet = Vec::with_capacity(crate::MTU + crate::ENCRYPTION_OVERHEAD);
     if let Some(dst_ip) = extract_dst_ip(&buf) {
         if let Some(&pub_key) = runtime_conf.read().await.ip_to_pubkey.get(&dst_ip) {
+            #[cfg(debug_assertions)]
+            println!(
+                "Destination IP: {dst_ip}, Public Key: {}",
+                base64::encode(pub_key)
+            );
             if let Some(peer) = peer_connections.read().await.get(&pub_key) {
+                #[cfg(debug_assertions)]
+                println!(
+                    "Found peer connection for destination IP: {dst_ip}, Public Key: {}",
+                    base64::encode(pub_key)
+                );
                 if let Some(cipher) = runtime_conf
                     .read()
                     .await
                     .ciphers
                     .get(&peer.last_endpoint.unwrap())
                 {
+                    #[cfg(debug_assertions)]
+                    println!(
+                        "Using cipher for destination IP: {dst_ip}, Public Key: {}",
+                        base64::encode(pub_key)
+                    );
                     let mut nonce_bytes = [0u8; 12];
                     rand::rng().fill_bytes(&mut nonce_bytes);
                     let nonce = Nonce::from_slice(&nonce_bytes);
