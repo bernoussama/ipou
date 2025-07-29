@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
                     config_update_tx.clone(),
                 ),
             );
-            peer_connection.mark_connected(endpoint);
+            // peer_connection.mark_connected(endpoint);
         }
     }
 
