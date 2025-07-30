@@ -38,7 +38,7 @@ pub enum UdpMessage {
 
 // errors
 #[derive(thiserror::Error, Debug)]
-pub enum IpouError {
+pub enum Error {
     #[error("An unknown error occurred: {0}")]
     Unknown(String),
     #[error("I/O error: {0}")]
@@ -61,4 +61,4 @@ pub enum IpouError {
     InvalidPacketType(u8),
 }
 
-pub type Result<T> = std::result::Result<T, IpouError>;
+pub type Result<T> = std::result::Result<T, Error>;

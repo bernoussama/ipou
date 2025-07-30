@@ -1,8 +1,8 @@
 #!/bin/bash
 
 cargo b --release
-sudo setcap cap_net_admin=eip target/release/opentun
-target/release/opentun "$1" "$2" "$3" &
+sudo setcap cap_net_admin=eip target/release/trustun
+target/release/trustun "$1" "$2" "$3" &
 pid=$!
 # sudo ip addr add 10.0.0.1/24 dev utun0
 sudo ip route add 10.0.0.0/8 dev utun0

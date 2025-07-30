@@ -692,24 +692,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
-name = "opentun"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bincode",
- "chacha20poly1305",
- "clap",
- "futures",
- "rand",
- "serde",
- "serde_yml",
- "thiserror",
- "tokio",
- "tun",
- "x25519-dalek",
-]
-
-[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1047,6 +1029,24 @@ dependencies = [
  "futures-sink",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "trustun"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bincode",
+ "chacha20poly1305",
+ "clap",
+ "futures",
+ "rand",
+ "serde",
+ "serde_yml",
+ "thiserror",
+ "tokio",
+ "tun",
+ "x25519-dalek",
 ]
 
 [[package]]

@@ -1,32 +1,32 @@
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
-use opentun::cli::commands::{handle_gen_key, handle_pub_key};
-use opentun::config::{PeerRole, RuntimeConfig};
-use opentun::crypto::PublicKeyBytes;
+use trustun::cli::commands::{handle_gen_key, handle_pub_key};
+use trustun::config::{PeerRole, RuntimeConfig};
+use trustun::crypto::PublicKeyBytes;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::{collections::HashMap, net::Ipv4Addr};
 
 use clap::Parser;
-use opentun::tasks;
-use opentun::{IpouError, Result};
+use trustun::tasks;
+use trustun::{IpouError, Result};
 use tokio::net::UdpSocket;
 use tokio::sync::{RwLock, mpsc};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = opentun::cli::Cli::parse();
+    let cli = trustun::cli::Cli::parse();
     // Subcommands
     match &cli.command {
-        Some(opentun::cli::Commands::Genkey {}) => handle_gen_key(),
-        Some(opentun::cli::Commands::Pubkey {}) => handle_pub_key(),
+        Some(trustun::cli::Commands::Genkey {}) => handle_gen_key(),
+        Some(trustun::cli::Commands::Pubkey {}) => handle_pub_key(),
         None => Ok(()),
     }
     .expect("Failed to execute command");
 
     // Load config file
     let config_path = "config.yaml";
-    let conf = opentun::config::load_config(config_path);
+    let conf = trustun::config::load_config(config_path);
     let config = Arc::new(conf);
 
     let config_clone = Arc::clone(&config);
@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
 
     // Create peer manager
     let (config_update_tx, config_update_rx) = mpsc::unbounded_channel();
-    let peer_manager = Arc::new(opentun::net::PeerManager::new(config_update_tx.clone()));
+    let peer_manager = Arc::new(trustun::net::PeerManager::new(config_update_tx.clone()));
 
     for peer_conn in &config.peers {
         let mut pub_key_bytes = [0u8; 32];
@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
         if let Some(endpoint) = peer_conn.endpoint {
             let mut peer_connections = peer_manager.peer_connections.write().await;
             let peer_connection = peer_connections.entry(pub_key_bytes).or_insert(
-                opentun::proto::state::PeerConnection::with_update_sender(
+                trustun::proto::state::PeerConnection::with_update_sender(
                     pub_key_bytes,
                     config_update_tx.clone(),
                 ),
@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
         .tun_name(&config_clone.name)
         .address(config_clone.address.parse::<Ipv4Addr>().unwrap())
         .netmask((255, 255, 255, 0))
-        .mtu(opentun::MTU as u16)
+        .mtu(trustun::MTU as u16)
         .up();
 
     let dev = tun::create_as_async(&tun_config).expect("Failed to create TUN device");
@@ -121,9 +121,9 @@ async fn main() -> Result<()> {
     let sock_arc = Arc::new(sock);
 
     // Create channel for sending decrypted packets to TUN device
-    let (dtx, drx) = mpsc::channel::<opentun::DecryptedPacket>(opentun::CHANNEL_BUFFER_SIZE);
+    let (dtx, drx) = mpsc::channel::<trustun::DecryptedPacket>(trustun::CHANNEL_BUFFER_SIZE);
     // Create channel for sending encrypted packets and PROTOCOL packets to UDP socket
-    let (etx, erx) = mpsc::channel::<opentun::EncryptedPacket>(opentun::CHANNEL_BUFFER_SIZE);
+    let (etx, erx) = mpsc::channel::<trustun::EncryptedPacket>(trustun::CHANNEL_BUFFER_SIZE);
 
     let mut tasks = Vec::new();
     let tun_listener = tokio::spawn(tasks::tun_listener(
