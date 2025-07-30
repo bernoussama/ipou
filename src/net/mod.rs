@@ -1,8 +1,7 @@
-use chacha20poly1305::Nonce;
+use chacha20poly1305::{Nonce, ChaCha20Poly1305, KeyInit};
 use chacha20poly1305::aead::Aead;
 use rand::RngCore;
 use std::collections::HashMap;
-use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
@@ -63,6 +62,31 @@ impl PeerManager {
                     .await
                     .ip_to_pubkey
                     .insert(sender_private_ip, sender_pubkey);
+
+                // Create cipher for the peer if we don't have one yet
+                if !runtime_conf.read().await.ciphers.contains_key(&sender_addr) {
+                    if let Some(shared_secret) = runtime_conf.read().await.shared_secrets.get(&sender_pubkey) {
+                        let cipher = ChaCha20Poly1305::new(shared_secret.into());
+                        runtime_conf
+                            .write()
+                            .await
+                            .ciphers
+                            .insert(sender_addr, cipher);
+                        
+                        #[cfg(debug_assertions)]
+                        println!(
+                            "[HANDSHAKE] Created cipher for peer {} at endpoint {}",
+                            base64::encode(sender_pubkey),
+                            sender_addr
+                        );
+                    } else {
+                        #[cfg(debug_assertions)]
+                        eprintln!(
+                            "[HANDSHAKE] No shared secret found for peer {}",
+                            base64::encode(sender_pubkey)
+                        );
+                    }
+                }
 
                 // Store the association between public key, private IP, and socket address
                 #[cfg(debug_assertions)]
