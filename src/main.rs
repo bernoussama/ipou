@@ -1,10 +1,7 @@
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
-use futures::lock;
 use opentun::cli::commands::{handle_gen_key, handle_pub_key};
 use opentun::config::{PeerRole, RuntimeConfig};
 use opentun::crypto::PublicKeyBytes;
-use opentun::net::PeerConnections;
-use opentun::proto::Packet;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::{collections::HashMap, net::Ipv4Addr};

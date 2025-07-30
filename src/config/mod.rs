@@ -6,7 +6,7 @@ use std::{
 use chacha20poly1305::ChaCha20Poly1305;
 use serde::{Deserialize, Serialize};
 
-use crate::{Peer, crypto::PublicKeyBytes, proto::state::PeerState};
+use crate::{crypto::PublicKeyBytes, proto::state::PeerState};
 
 use tokio::sync::mpsc;
 

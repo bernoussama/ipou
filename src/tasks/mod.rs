@@ -38,7 +38,7 @@ pub async fn tun_listener(
         let len = dev.recv(&mut tun_buf).await?;
 
         #[cfg(debug_assertions)]
-        println!("[TUN_LISTENER] Received packet of {} bytes from TUN", len);
+        println!("[TUN_LISTENER] Received packet of {len} bytes from TUN");
 
         // Spawn handler task for each packet
         if len >= 20 {
@@ -54,7 +54,7 @@ pub async fn tun_listener(
             ));
         } else {
             #[cfg(debug_assertions)]
-            println!("[TUN_LISTENER] Dropping packet too small: {} bytes", len);
+            println!("[TUN_LISTENER] Dropping packet too small: {len} bytes");
         }
         // Send raw packet + result channel to handler
     }
@@ -80,7 +80,7 @@ pub async fn udp_listener(
         let (len, peer_addr) = sock.recv_from(&mut udp_buf).await?;
 
         #[cfg(debug_assertions)]
-        println!("[UDP_LISTENER] Received {} bytes from {}", len, peer_addr);
+        println!("[UDP_LISTENER] Received {len} bytes from {peer_addr}");
 
         if len > 0 {
             // let packet_types = std::mem::variant_count::<Packet>(); // unstable feature
@@ -125,8 +125,7 @@ pub async fn udp_listener(
                     if len >= 30 {
                         #[cfg(debug_assertions)]
                         println!(
-                            "[UDP_LISTENER] Received encrypted packet from {peer_addr} ({} bytes)",
-                            len
+                            "[UDP_LISTENER] Received encrypted packet from {peer_addr} ({len} bytes)"
                         );
                         // 12 bytes nonce + 16 bytes auth tag
                         tokio::spawn(crate::net::handle_udp_packet(
@@ -139,8 +138,7 @@ pub async fn udp_listener(
                     } else {
                         #[cfg(debug_assertions)]
                         println!(
-                            "[UDP_LISTENER] Dropping encrypted packet too small: {} bytes",
-                            len
+                            "[UDP_LISTENER] Dropping encrypted packet too small: {len} bytes"
                         );
                     }
                 }
@@ -154,7 +152,7 @@ pub async fn udp_listener(
             }
         } else {
             #[cfg(debug_assertions)]
-            println!("[UDP_LISTENER] Received empty packet from {}", peer_addr);
+            println!("[UDP_LISTENER] Received empty packet from {peer_addr}");
         };
         // Send raw packet + result channel to handler
     }
@@ -219,7 +217,7 @@ pub async fn result_coordinator(
 /// This task sends periodic keepalive packets to the remote peer
 pub async fn keepalive(remote_addr: SocketAddr, sock: Arc<UdpSocket>) -> crate::Result<()> {
     #[cfg(debug_assertions)]
-    println!("[KEEPALIVE] Starting keepalive task for {}", remote_addr);
+    println!("[KEEPALIVE] Starting keepalive task for {remote_addr}");
 
     let keepalive_packet = Packet::KeepAlive {
         timestamp: crate::proto::now(),
@@ -230,11 +228,11 @@ pub async fn keepalive(remote_addr: SocketAddr, sock: Arc<UdpSocket>) -> crate::
     };
 
     #[cfg(debug_assertions)]
-    println!("[KEEPALIVE] Prepared keepalive packet for {}", remote_addr);
+    println!("[KEEPALIVE] Prepared keepalive packet for {remote_addr}");
 
     loop {
         #[cfg(debug_assertions)]
-        println!("[KEEPALIVE] Sending keepalive to {}...", remote_addr);
+        println!("[KEEPALIVE] Sending keepalive to {remote_addr}...");
 
         let packet_bytes = wire_packet.encode()?;
 
@@ -279,11 +277,11 @@ pub async fn handshake(
     #[cfg(debug_assertions)]
     println!(
         "[HANDSHAKE] Decoded public key: {}",
-        base64::encode(&pubkey_bytes)
+        base64::encode(pubkey_bytes)
     );
 
     let private_ip: IpAddr = config.address.parse()
-        .map_err(|e| crate::IpouError::Unknown(format!("Invalid private IP in config: {}", e)))?;
+        .map_err(|e| crate::IpouError::Unknown(format!("Invalid private IP in config: {e}")))?;
 
     let handshake_packet = Packet::HandshakeInit {
         sender_pubkey: pubkey_bytes,
@@ -321,15 +319,13 @@ pub async fn handshake(
                 if let Err(e) = sock.send_to(&packet_bytes, endpoint).await {
                     #[cfg(debug_assertions)]
                     println!(
-                        "[HANDSHAKE] Error sending handshake packet to {}: {e}",
-                        endpoint
+                        "[HANDSHAKE] Error sending handshake packet to {endpoint}: {e}"
                     );
-                    eprintln!("Error sending handshake packet to {}: {e}", endpoint);
+                    eprintln!("Error sending handshake packet to {endpoint}: {e}");
                 } else {
                     #[cfg(debug_assertions)]
                     println!(
-                        "[HANDSHAKE] Successfully sent handshake packet to {}",
-                        endpoint
+                        "[HANDSHAKE] Successfully sent handshake packet to {endpoint}"
                     );
                 }
             } else {
@@ -353,7 +349,7 @@ pub async fn handshake(
             .all(|conn| conn.is_connected());
 
         #[cfg(debug_assertions)]
-        println!("[HANDSHAKE] All peers connected: {}", all_connected);
+        println!("[HANDSHAKE] All peers connected: {all_connected}");
 
         if all_connected {
             #[cfg(debug_assertions)]
@@ -383,7 +379,7 @@ pub async fn config_updater(
 
     while let Some(event) = update_rx.recv().await {
         #[cfg(debug_assertions)]
-        println!("[CONFIG_UPDATER] Received config update event: {:?}", event);
+        println!("[CONFIG_UPDATER] Received config update event: {event:?}");
 
         match event {
             ConfigUpdateEvent::PeerConnected { pubkey, endpoint } => {
@@ -445,8 +441,7 @@ pub async fn config_updater(
                     if let Some(endpoint) = peer.last_endpoint {
                         #[cfg(debug_assertions)]
                         println!(
-                            "[CONFIG_UPDATER] Removing cipher for endpoint {} from runtime config",
-                            endpoint
+                            "[CONFIG_UPDATER] Removing cipher for endpoint {endpoint} from runtime config"
                         );
 
                         runtime_config.write().await.ciphers.remove(&endpoint);
@@ -505,7 +500,7 @@ async fn update_config_file(
 
     // Read current config
     #[cfg(debug_assertions)]
-    println!("[UPDATE_CONFIG_FILE] Reading config file: {}", config_path);
+    println!("[UPDATE_CONFIG_FILE] Reading config file: {config_path}");
 
     let mut config: Config = {
         let content = tokio::fs::read_to_string(config_path).await?;
