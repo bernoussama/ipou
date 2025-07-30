@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::{SocketAddr, IpAddr}, sync::Arc};
 
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use tokio::{
@@ -282,8 +282,12 @@ pub async fn handshake(
         base64::encode(&pubkey_bytes)
     );
 
+    let private_ip: IpAddr = config.address.parse()
+        .map_err(|e| crate::IpouError::Unknown(format!("Invalid private IP in config: {}", e)))?;
+
     let handshake_packet = Packet::HandshakeInit {
         sender_pubkey: pubkey_bytes,
+        sender_private_ip: private_ip,
         timestamp: crate::proto::now(),
     };
     let wire_packet = crate::proto::WirePacket {

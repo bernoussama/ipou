@@ -40,6 +40,7 @@ impl PeerManager {
         if let Some(res) = match packet {
             Packet::HandshakeInit {
                 sender_pubkey,
+                sender_private_ip,
                 timestamp,
             } => {
                 let mut peer_connections = self.peer_connections.write().await;
@@ -51,6 +52,26 @@ impl PeerManager {
                 );
                 connection.mark_connected(sender_addr);
                 connection.last_seen = timestamp;
+
+                runtime_conf
+                    .write()
+                    .await
+                    .ips
+                    .insert(sender_addr, sender_private_ip);
+                runtime_conf
+                    .write()
+                    .await
+                    .ip_to_pubkey
+                    .insert(sender_private_ip, sender_pubkey);
+
+                // Store the association between public key, private IP, and socket address
+                #[cfg(debug_assertions)]
+                println!(
+                    "[HANDSHAKE] Associated peer {} (private IP: {}) with socket: {}",
+                    base64::encode(sender_pubkey),
+                    sender_private_ip,
+                    sender_addr
+                );
 
                 // Respond with HandshakeResponse
                 Some(WirePacket {

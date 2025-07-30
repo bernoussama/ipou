@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, IpAddr};
 
 use bincode::{
     Decode, Encode,
@@ -19,6 +19,7 @@ pub type Timestamp = u64;
 pub enum Packet {
     HandshakeInit {
         sender_pubkey: PublicKeyBytes,
+        sender_private_ip: IpAddr,
         timestamp: Timestamp,
     },
     HandshakeResponse {
@@ -137,8 +138,10 @@ mod tests {
     fn test_handshake_init_encode_decode() {
         let initial_sender_pubkey = [1u8; 32];
         let initial_timestamp = now();
+        let initial_private_ip = "10.0.0.1".parse().expect("Valid IP");
         let packet = Packet::HandshakeInit {
             sender_pubkey: initial_sender_pubkey,
+            sender_private_ip: initial_private_ip,
             timestamp: initial_timestamp,
         };
         let encoded = packet
@@ -148,9 +151,11 @@ mod tests {
         match decoded {
             Packet::HandshakeInit {
                 sender_pubkey,
+                sender_private_ip,
                 timestamp,
             } => {
                 assert_eq!(sender_pubkey, initial_sender_pubkey);
+                assert_eq!(sender_private_ip, initial_private_ip);
                 assert_eq!(timestamp, initial_timestamp);
             }
             _ => panic!("Decoded packet type mismatch"),
@@ -201,9 +206,11 @@ mod tests {
     fn test_wire_handshake_init() {
         let initial_sender_pubkey = [1u8; 32];
         let initial_timestamp = now();
+        let initial_private_ip = "10.0.0.1".parse().expect("Valid IP");
 
         let payload = Packet::HandshakeInit {
             sender_pubkey: initial_sender_pubkey,
+            sender_private_ip: initial_private_ip,
             timestamp: initial_timestamp,
         };
 
@@ -221,9 +228,11 @@ mod tests {
         match decoded.payload {
             Packet::HandshakeInit {
                 sender_pubkey,
+                sender_private_ip,
                 timestamp,
             } => {
                 assert_eq!(sender_pubkey, initial_sender_pubkey);
+                assert_eq!(sender_private_ip, initial_private_ip);
                 assert_eq!(timestamp, initial_timestamp);
             }
             _ => panic!("Decoded packet type mismatch"),
