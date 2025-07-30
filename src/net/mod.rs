@@ -7,7 +7,7 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 
-use crate::IpouError;
+use crate::Error;
 use crate::config::{Config, ConfigUpdateSender, PeerRole, RuntimeConfig};
 use crate::crypto::PublicKeyBytes;
 use crate::proto::state::PeerConnection;
@@ -210,7 +210,7 @@ impl PeerManager {
             if let Err(e) = etx.send((packet_bytes.clone(), sender_addr)).await {
                 #[cfg(debug_assertions)]
                 eprintln!("Error sending encrypted packet through channel: {e}");
-                Err(IpouError::Unknown("Sending packet failed".to_string()))
+                Err(Error::Unknown("Sending packet failed".to_string()))
             } else {
                 Ok(())
             }

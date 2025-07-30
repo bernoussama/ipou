@@ -8,7 +8,7 @@ use std::{collections::HashMap, net::Ipv4Addr};
 
 use clap::Parser;
 use trustun::tasks;
-use trustun::{IpouError, Result};
+use trustun::{Error, Result};
 use tokio::net::UdpSocket;
 use tokio::sync::{RwLock, mpsc};
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
         .up();
 
     let dev = tun::create_as_async(&tun_config).expect("Failed to create TUN device");
-    let sock = UdpSocket::bind(Arc::clone(&config).endpoint.ok_or(IpouError::Unknown(
+    let sock = UdpSocket::bind(Arc::clone(&config).endpoint.ok_or(Error::Unknown(
         "endpoint must be configured in config.yaml".to_string(),
     ))?)
     .await

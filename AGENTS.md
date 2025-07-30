@@ -28,9 +28,9 @@
 
 ### Error Handling
 - Use `thiserror` for custom error types with `#[error]` attribute
-- Define project `Result<T>` type alias for `std::result::Result<T, IpouError>`
+- Define project `Result<T>` type alias for `std::result::Result<T, Error>`
 - Use `?` operator for error propagation
-- Add `#[from]` attribute for automatic error conversion in IpouError enum
+- Add `#[from]` attribute for automatic error conversion in Error enum
 
 ### Async/Concurrency
 - Use `tokio` for async runtime and utilities

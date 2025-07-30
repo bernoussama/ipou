@@ -6,7 +6,7 @@ use bincode::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{IpouError, crypto::PublicKeyBytes};
+use crate::{Error, crypto::PublicKeyBytes};
 
 pub mod state;
 
@@ -45,14 +45,14 @@ impl Packet {
     pub fn decode(bytes: &[u8]) -> crate::Result<Self> {
         match bincode::decode_from_slice::<Packet, _>(bytes, config::standard()) {
             Ok((packet, _len)) => Ok(packet),
-            Err(e) => Err(crate::IpouError::DecodeError(e)),
+            Err(e) => Err(crate::Error::DecodeError(e)),
         }
     }
     /// encodes a Packet to network bytes
     pub fn encode(&self) -> crate::Result<Vec<u8>> {
         match bincode::encode_to_vec(self, config::standard()) {
             Ok(bytes) => Ok(bytes),
-            Err(e) => Err(crate::IpouError::EncodeError(e)),
+            Err(e) => Err(crate::Error::EncodeError(e)),
         }
     }
 }
@@ -73,7 +73,7 @@ impl WirePacket {
     pub fn decode(bytes: &[u8]) -> crate::Result<Self> {
         // first byte to PacketType variant
         if bytes.len() < 2 {
-            Err(IpouError::Unknown("WirePacket length < 2".to_string()))
+            Err(Error::Unknown("WirePacket length < 2".to_string()))
         } else {
             let packet_type = PacketType::try_from(bytes[0])?;
             match Packet::decode(&bytes[1..]) {
@@ -97,7 +97,7 @@ pub enum PacketType {
     VpnData = 0x10,
 }
 impl TryFrom<u8> for PacketType {
-    type Error = IpouError;
+    type Error = Error;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
@@ -107,7 +107,7 @@ impl TryFrom<u8> for PacketType {
             0x04 => Ok(PacketType::PeerInfo),
             0x05 => Ok(PacketType::KeepAlive),
             0x10 => Ok(PacketType::VpnData),
-            _ => Err(IpouError::InvalidPacketType(value)),
+            _ => Err(Error::InvalidPacketType(value)),
         }
     }
 }

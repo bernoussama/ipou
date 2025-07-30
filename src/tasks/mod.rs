@@ -281,7 +281,7 @@ pub async fn handshake(
     );
 
     let private_ip: IpAddr = config.address.parse()
-        .map_err(|e| crate::IpouError::Unknown(format!("Invalid private IP in config: {e}")))?;
+        .map_err(|e| crate::Error::Unknown(format!("Invalid private IP in config: {e}")))?;
 
     let handshake_packet = Packet::HandshakeInit {
         sender_pubkey: pubkey_bytes,
