@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::Error;
 use crate::config::{Config, ConfigUpdateSender, PeerRole, RuntimeConfig};
-use crate::crypto::PublicKeyBytes;
+use crate::crypto::{PublicKeyBytes, generate_shared_secret};
 use crate::proto::state::PeerConnection;
 use crate::proto::{Packet, PacketType, WirePacket};
 
@@ -88,7 +88,25 @@ impl PeerManager {
                             base64::encode(sender_pubkey)
                         );
                         //Create shared secret if it doesn't exist
-                        let mut runtime_conf = runtime_conf.write().await;
+                        let shared_secret =
+                            generate_shared_secret(&conf.secret, &base64::encode(sender_pubkey));
+
+                        #[cfg(debug_assertions)]
+                        println!(
+                            "[CONFIG_UPDATER] Creating cipher for peer {} at endpoint {}",
+                            base64::encode(sender_pubkey),
+                            sender_addr
+                        );
+
+                        let cipher = ChaCha20Poly1305::new(&shared_secret.into());
+                        runtime_conf
+                            .write()
+                            .await
+                            .ciphers
+                            .insert(sender_addr, cipher);
+
+                        #[cfg(debug_assertions)]
+                        println!("[CONFIG_UPDATER] Cipher added to runtime config");
                     }
                 }
 
