@@ -1,9 +1,9 @@
-use crate::{IpouError, Result};
+use crate::{Error, Result};
 
 pub fn handle_gen_key() -> Result<()> {
     let private_key = crate::crypto::gen_base64_private_key();
     if private_key.is_empty() {
-        return Err(IpouError::InvalidKeyLength(0)); // Requires error enum implementation
+        return Err(Error::InvalidKeyLength(0)); // Requires error enum implementation
     }
     println!("{private_key}");
     Ok(())
@@ -17,7 +17,7 @@ pub fn handle_pub_key() -> Result<()> {
 
     let public_key = crate::crypto::gen_base64_public_key(input)?;
     if public_key.is_empty() {
-        return Err(IpouError::InvalidKeyLength(0)); // Requires error enum implementation
+        return Err(Error::InvalidKeyLength(0)); // Requires error enum implementation
     }
     println!("{public_key}");
     Ok(())

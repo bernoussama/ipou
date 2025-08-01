@@ -1,10 +1,10 @@
-# opentun - IP over UDP VPN
+# trustun - IP over UDP VPN
 
 A secure, high-performance user-space IP-over-UDP tunnel implementation written in Rust using async I/O and modern cryptography.
 
 ## Overview
 
-**opentun** creates a TUN interface that tunnels IP packets over UDP with ChaCha20-Poly1305 encryption. It enables secure communication between peers across networks using Curve25519 key exchange and YAML-based configuration.
+**trustun** creates a TUN interface that tunnels IP packets over UDP with ChaCha20-Poly1305 encryption. It enables secure communication between peers across networks using Curve25519 key exchange and YAML-based configuration.
 
 ## Features
 
@@ -28,8 +28,8 @@ A secure, high-performance user-space IP-over-UDP tunnel implementation written 
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/opentun
-cd opentun
+git clone https://github.com/yourusername/trustun
+cd trustun
 cargo build --release
 ```
 
@@ -39,15 +39,13 @@ Generate cryptographic keys for secure communication:
 
 ```bash
 # Generate a private key
-./target/release/opentun genkey
-
+./target/release/trustun genkey
 # Generate public key from private key
-./target/release/opentun pubkey
-```
+./target/release/trustun pubkey```
 
 ### Configuration
 
-Create a `config.yaml` file or let opentun generate a default one:
+Create a `config.yaml` file or let trustun generate a default one:
 
 ```yaml
 name: "utun0"
@@ -65,10 +63,10 @@ peers:
 
 ```bash
 # Run with configuration file (recommended)
-sudo ./target/release/opentun
+sudo ./target/release/trustun
 
 # CLI arguments (legacy support)
-sudo ./target/release/opentun [NAME] [ADDRESS] [PORT]
+sudo ./target/release/trustun [NAME] [ADDRESS] [PORT]
 ```
 
 ### Using the Helper Script
@@ -82,7 +80,7 @@ chmod +x run.sh
 ## Command Line Options
 
 ```
-Usage: opentun [OPTIONS] [NAME] [ADDRESS] [PORT]
+Usage: trustun [OPTIONS] [NAME] [ADDRESS] [PORT]
 
 Arguments:
   [NAME]     TUN interface name (default: from config)
@@ -132,7 +130,7 @@ Peer A (10.0.0.1)                                    Peer B (10.0.0.2)
           │ 1. Read IP packet                                   │ 6. Write decrypted
           ▼                                                     │    IP packet
 ┌─────────────────┐                                   ┌─────────────────┐
-│ opentun Process │                                   │ opentun Process │
+│ trustun Process │                                   │ trustun Process │
 │                 │                                   │                 │
 │ ┌─────────────┐ │                                   │ ┌─────────────┐ │
 │ │ Extract     │ │                                   │ │ Decrypt     │ │
@@ -183,9 +181,9 @@ Legend:
 
 ```bash
 # Generate private key
-PRIVATE_A=$(./target/release/opentun genkey)
+PRIVATE_A=$(./target/release/trustun genkey)
 # Generate public key  
-PUBLIC_A=$(echo "$PRIVATE_A" | ./target/release/opentun pubkey)
+PUBLIC_A=$(echo "$PRIVATE_A" | ./target/release/trustun pubkey)
 ```
 
 2. Create config.yaml:
@@ -205,7 +203,7 @@ peers:
 3. Run:
 
 ```bash
-sudo ./target/release/opentun
+sudo ./target/release/trustun
 ```
 
 **Node B:**
@@ -216,7 +214,7 @@ sudo ./target/release/opentun
 
 ### Network Configuration
 
-After starting opentun, configure routing:
+After starting trustun, configure routing:
 
 ```bash
 # Add route for the tunnel network

@@ -1,87 +1,356 @@
-use chacha20poly1305::Nonce;
 use chacha20poly1305::aead::Aead;
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use rand::RngCore;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::{net::SocketAddr, sync::Arc};
+use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 
-use crate::config::{Config, RuntimeConfig};
+use crate::Error;
+use crate::config::{Config, ConfigUpdateSender, PeerRole, RuntimeConfig};
+use crate::crypto::{PublicKeyBytes, generate_shared_secret};
+use crate::proto::state::PeerConnection;
+use crate::proto::{Packet, PacketType, WirePacket};
+
+pub type PeerConnections = Arc<RwLock<HashMap<PublicKeyBytes, PeerConnection>>>;
+
+pub struct PeerManager {
+    pub peer_connections: PeerConnections,
+    pub config_update_tx: ConfigUpdateSender,
+}
+
+impl PeerManager {
+    pub fn new(config_update_tx: ConfigUpdateSender) -> Self {
+        Self {
+            peer_connections: Arc::new(RwLock::new(HashMap::new())),
+            config_update_tx,
+        }
+    }
+    pub async fn handle_proto_packet(
+        &self,
+        conf: Arc<Config>,
+        runtime_conf: Arc<RwLock<RuntimeConfig>>,
+        packet: Packet,
+        sender_addr: SocketAddr,
+        etx: mpsc::Sender<crate::EncryptedPacket>,
+    ) -> crate::Result<()> {
+        // if there is a response
+        if let Some(res) = match packet {
+            Packet::HandshakeInit {
+                sender_pubkey,
+                sender_private_ip,
+                timestamp,
+            } => {
+                let mut peer_connections = self.peer_connections.write().await;
+                let connection = peer_connections.entry(sender_pubkey).or_insert(
+                    PeerConnection::with_update_sender(
+                        sender_pubkey,
+                        self.config_update_tx.clone(),
+                    ),
+                );
+                connection.mark_connected(sender_addr);
+                connection.last_seen = timestamp;
+
+                runtime_conf
+                    .write()
+                    .await
+                    .ips
+                    .insert(sender_addr, sender_private_ip);
+                runtime_conf
+                    .write()
+                    .await
+                    .ip_to_pubkey
+                    .insert(sender_private_ip, sender_pubkey);
+
+                // Create cipher for the peer if we don't have one yet
+                if !runtime_conf.read().await.ciphers.contains_key(&sender_addr) {
+                    if let Some(shared_secret) =
+                        runtime_conf.read().await.shared_secrets.get(&sender_pubkey)
+                    {
+                        let cipher = ChaCha20Poly1305::new(shared_secret.into());
+                        runtime_conf
+                            .write()
+                            .await
+                            .ciphers
+                            .insert(sender_addr, cipher);
+
+                        #[cfg(debug_assertions)]
+                        println!(
+                            "[HANDSHAKE] Created cipher for peer {} at endpoint {}",
+                            base64::encode(sender_pubkey),
+                            sender_addr
+                        );
+                    } else {
+                        #[cfg(debug_assertions)]
+                        eprintln!(
+                            "[HANDSHAKE] No shared secret found for peer {}",
+                            base64::encode(sender_pubkey)
+                        );
+                        //Create shared secret if it doesn't exist
+                        let shared_secret =
+                            generate_shared_secret(&conf.secret, &base64::encode(sender_pubkey));
+
+                        #[cfg(debug_assertions)]
+                        println!(
+                            "[CONFIG_UPDATER] Creating cipher for peer {} at endpoint {}",
+                            base64::encode(sender_pubkey),
+                            sender_addr
+                        );
+
+                        let cipher = ChaCha20Poly1305::new(&shared_secret.into());
+                        runtime_conf
+                            .write()
+                            .await
+                            .ciphers
+                            .insert(sender_addr, cipher);
+
+                        #[cfg(debug_assertions)]
+                        println!("[CONFIG_UPDATER] Cipher added to runtime config");
+                    }
+                }
+
+                // Store the association between public key, private IP, and socket address
+                #[cfg(debug_assertions)]
+                println!(
+                    "[HANDSHAKE] Associated peer {} (private IP: {}) with socket: {}",
+                    base64::encode(sender_pubkey),
+                    sender_private_ip,
+                    sender_addr
+                );
+
+                // Respond with HandshakeResponse
+                Some(WirePacket {
+                    packet_type: PacketType::HandshakeResponse,
+                    payload: Packet::HandshakeResponse {
+                        success: true,
+                        message: "Handshake successful".to_string(),
+                    },
+                })
+            }
+            Packet::HandshakeResponse { success, message } => {
+                if success {
+                    #[cfg(debug_assertions)]
+                    println!("Handshake successful: {message}");
+                    let sender_pubkey = runtime_conf
+                        .read()
+                        .await
+                        .ip_to_pubkey
+                        .get(
+                            &runtime_conf
+                                .read()
+                                .await
+                                .ips
+                                .get(&sender_addr)
+                                .copied()
+                                .unwrap(),
+                        )
+                        .copied()
+                        .unwrap();
+                    let mut peer_connections = self.peer_connections.write().await;
+
+                    let connection = peer_connections.get_mut(&sender_pubkey).unwrap();
+                    connection.mark_connected(sender_addr);
+                    connection.last_seen = crate::proto::now();
+                } else {
+                    #[cfg(debug_assertions)]
+                    eprintln!("Handshake failed: {message}");
+                }
+                None
+            }
+            Packet::RequestPeer { target_pubkey } => {
+                let peer_connections = self.peer_connections.read().await;
+                if let Some(peer) = peer_connections.get(&target_pubkey) {
+                    // Respond with PeerInfo
+                    Some(WirePacket {
+                        packet_type: PacketType::PeerInfo,
+                        payload: Packet::PeerInfo {
+                            pubkey: target_pubkey,
+                            endpoint: peer.last_endpoint,
+                            last_seen: peer.last_seen,
+                        },
+                    })
+                } else {
+                    eprintln!("Peer {} not found!", base64::encode(target_pubkey));
+                    Some(WirePacket {
+                        packet_type: PacketType::PeerInfo,
+                        payload: Packet::PeerInfo {
+                            pubkey: target_pubkey,
+                            endpoint: None,
+                            last_seen: 0,
+                        },
+                    })
+                }
+            }
+            Packet::PeerInfo {
+                pubkey,
+                endpoint,
+                last_seen,
+            } => {
+                #[cfg(debug_assertions)]
+                println!(
+                    "Received PeerInfo for {}: {:?}, last seen: {}",
+                    base64::encode(pubkey),
+                    endpoint,
+                    last_seen
+                );
+                if let Some(endpoint) = endpoint {
+                    // self.initiate_connection(pubkey, endpoint).await;
+                    self.peer_connections
+                        .write()
+                        .await
+                        .entry(pubkey)
+                        .or_insert(PeerConnection::new(pubkey))
+                        .mark_connected(endpoint);
+                }
+                None
+            }
+
+            Packet::KeepAlive { timestamp } => {
+                #[cfg(debug_assertions)]
+                println!("Received KeepAlive at {timestamp}");
+                // Reply with keepalive to maintain NAT mapping
+                if conf.role == PeerRole::Anchor {
+                    #[cfg(debug_assertions)]
+                    println!("Anchor peer received KeepAlive from {sender_addr}");
+
+                    Some(WirePacket {
+                        packet_type: PacketType::KeepAlive,
+                        payload: Packet::KeepAlive {
+                            timestamp: crate::proto::now(),
+                        },
+                    })
+                } else {
+                    #[cfg(debug_assertions)]
+                    println!("Regular peer received KeepAlive from {sender_addr}");
+                    None
+                }
+            }
+            _ => None,
+        } {
+            let packet_bytes = res.encode()?;
+            if let Err(e) = etx.send((packet_bytes.clone(), sender_addr)).await {
+                #[cfg(debug_assertions)]
+                eprintln!("Error sending encrypted packet through channel: {e}");
+                Err(Error::Unknown("Sending packet failed".to_string()))
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+}
 
 pub async fn handle_udp_packet(
-    udp_buf: [u8; crate::MTU + 512],
+    udp_buf: [u8; crate::MAX_UDP_SIZE],
     len: usize,
     peer_addr: SocketAddr,
-    runtime_conf: Arc<RuntimeConfig>,
+    runtime_conf: Arc<RwLock<RuntimeConfig>>,
     dtx: mpsc::Sender<crate::DecryptedPacket>,
 ) {
     // Extract nonce and encrypted data
     let nonce = Nonce::from_slice(&udp_buf[..12]);
     let encrypted_data = &udp_buf[12..len];
 
-    if let Some(ip) = runtime_conf.ips.get(&peer_addr) {
-        if let Some(cipher) = runtime_conf.ciphers.get(ip) {
-            match cipher.decrypt(nonce, encrypted_data) {
-                Ok(decrypted) => {
-                    if decrypted.len() >= 20 {
-                        if let Err(e) = dtx.send(decrypted).await {
-                            eprintln!("Error sending decrypted packet through channel: {e}");
-                        }
-                    } else {
-                        eprintln!("Decrypted packet too short: {} bytes", decrypted.len());
+    if let Some(cipher) = runtime_conf.read().await.ciphers.get(&peer_addr) {
+        match cipher.decrypt(nonce, encrypted_data) {
+            Ok(decrypted) => {
+                if decrypted.len() >= 20 {
+                    if let Err(e) = dtx.send(decrypted).await {
+                        eprintln!("Error sending decrypted packet through channel: {e}");
                     }
-                }
-                Err(e) => {
-                    eprintln!("Decryption failed for peer {ip}: {e}");
+                } else {
+                    eprintln!("Decrypted packet too short: {} bytes", decrypted.len());
                 }
             }
-        } else {
-            eprintln!("No cipher found for peer: {ip}");
+            Err(e) => {
+                eprintln!("Decryption failed for peer {peer_addr:?}: {e}");
+            }
         }
     } else {
-        eprintln!("No IP found for peer address: {peer_addr}");
+        eprintln!("No cipher found for peer: {peer_addr:?}");
     }
 }
 
 pub async fn handle_tun_packet(
     buf: [u8; crate::MTU],
     len: usize,
-    conf_clone: Arc<Config>,
-    runtime_conf: Arc<RuntimeConfig>,
+    peer_connections: PeerConnections,
+    runtime_conf: Arc<RwLock<RuntimeConfig>>,
     etx: mpsc::Sender<crate::EncryptedPacket>,
 ) {
     let mut packet = Vec::with_capacity(crate::MTU + crate::ENCRYPTION_OVERHEAD);
     if let Some(dst_ip) = extract_dst_ip(&buf) {
-        if let Some(peer) = conf_clone.peers.get(&dst_ip) {
-            if let Some(cipher) = runtime_conf.ciphers.get(&dst_ip) {
-                let mut nonce_bytes = [0u8; 12];
-                rand::rng().fill_bytes(&mut nonce_bytes);
-                let nonce = Nonce::from_slice(&nonce_bytes);
-                let data = &buf[..len];
-                match cipher.encrypt(nonce, data) {
-                    Ok(encrypted) => {
-                        packet.clear();
-                        packet.extend_from_slice(&nonce_bytes); // Include nonce
-                        packet.extend_from_slice(&encrypted);
-                        #[cfg(debug_assertions)]
-                        println!(
-                            "Sending encrypted packet to {}: {} bytes",
-                            peer.sock_addr,
-                            packet.len()
-                        );
-                        if let Err(e) = etx.send((packet.clone(), peer.sock_addr)).await {
+        if let Some(&pub_key) = runtime_conf.read().await.ip_to_pubkey.get(&dst_ip) {
+            #[cfg(debug_assertions)]
+            println!(
+                "Destination IP: {dst_ip}, Public Key: {}",
+                base64::encode(pub_key)
+            );
+            if let Some(peer) = peer_connections.read().await.get(&pub_key) {
+                #[cfg(debug_assertions)]
+                println!(
+                    "Found peer connection for destination IP: {dst_ip}, Public Key: {}",
+                    base64::encode(pub_key)
+                );
+                if let Some(cipher) = runtime_conf
+                    .read()
+                    .await
+                    .ciphers
+                    .get(&peer.last_endpoint.unwrap())
+                {
+                    #[cfg(debug_assertions)]
+                    println!(
+                        "Using cipher for destination IP: {dst_ip}, Public Key: {}",
+                        base64::encode(pub_key)
+                    );
+                    let mut nonce_bytes = [0u8; 12];
+                    rand::rng().fill_bytes(&mut nonce_bytes);
+                    let nonce = Nonce::from_slice(&nonce_bytes);
+                    let data = &buf[..len];
+                    match cipher.encrypt(nonce, data) {
+                        Ok(encrypted) => {
+                            packet.clear();
+                            packet.push(0x10); // Protocol packet type
+                            packet.extend_from_slice(&nonce_bytes); // Include nonce
+                            packet.extend_from_slice(&encrypted);
                             #[cfg(debug_assertions)]
-                            eprintln!("Error sending encrypted packet through channel: {e}");
+                            println!(
+                                "Sending encrypted packet to {:?}: {} bytes",
+                                peer.last_endpoint,
+                                packet.len()
+                            );
+                            if let Err(e) = etx
+                                .send((
+                                    packet.clone(),
+                                    peer.last_endpoint.expect("last_endpoint is None"),
+                                ))
+                                .await
+                            {
+                                #[cfg(debug_assertions)]
+                                eprintln!("Error sending encrypted packet through channel: {e}");
+                            }
+                        }
+                        Err(_e) => {
+                            #[cfg(debug_assertions)]
+                            eprintln!("Error encrypting packet for destination IP: {dst_ip}");
                         }
                     }
-                    Err(_e) => {
-                        #[cfg(debug_assertions)]
-                        eprintln!("Error encrypting packet for destination IP: {dst_ip}");
-                    }
+                } else {
+                    #[cfg(debug_assertions)]
+                    eprintln!("No cipher found for source IP: {dst_ip}")
                 }
             } else {
                 #[cfg(debug_assertions)]
-                eprintln!("No cipher found for source IP: {dst_ip}")
+                eprintln!(
+                    "No peer connection found for destination IP: {dst_ip}, Public Key: {}",
+                    base64::encode(pub_key)
+                );
             }
+        } else {
+            #[cfg(debug_assertions)]
+            println!("No public key found for destination IP: {dst_ip}");
         }
     } else {
         #[cfg(debug_assertions)]

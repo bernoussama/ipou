@@ -10,8 +10,10 @@ pub mod tasks;
 
 // Constants
 pub const MTU: usize = 1420;
+const MAX_UDP_SIZE: usize = (1 << 16) - 1;
 pub const CHANNEL_BUFFER_SIZE: usize = MTU + 512; // Buffered channels
 pub const ENCRYPTION_OVERHEAD: usize = 28; // 12 nonce + 16 auth tag
+pub const KEEPALIVE_INTERVAL: u64 = 26;
 
 // types
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, Clone)]
@@ -36,7 +38,7 @@ pub enum UdpMessage {
 
 // errors
 #[derive(thiserror::Error, Debug)]
-pub enum IpouError {
+pub enum Error {
     #[error("An unknown error occurred: {0}")]
     Unknown(String),
     #[error("I/O error: {0}")]
@@ -49,6 +51,14 @@ pub enum IpouError {
     InvalidKeyLength(usize),
     #[error("TUN device creation failed: {0}")]
     TunDevice(#[from] tun::Error),
+
+    #[error(" bincode decoding error: {0}")]
+    DecodeError(#[from] bincode::error::DecodeError),
+    #[error(" bincode encoding error: {0}")]
+    EncodeError(#[from] bincode::error::EncodeError),
+
+    #[error(" invalid packet type error: {0}")]
+    InvalidPacketType(u8),
 }
 
-pub type Result<T> = std::result::Result<T, IpouError>;
+pub type Result<T> = std::result::Result<T, Error>;
