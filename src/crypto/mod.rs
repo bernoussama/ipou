@@ -26,3 +26,15 @@ pub fn gen_base64_public_key(private_key: &str) -> crate::Result<String> {
     let public_key = PublicKey::from(&private_key);
     Ok(base64::encode(public_key.to_bytes()))
 }
+
+pub fn generate_shared_secret(base64_secret: &str, base64_pubkey: &str) -> [u8; 32] {
+    let mut secret_bytes = [0u8; 32];
+    base64::decode_config_slice(base64_secret, base64::STANDARD, &mut secret_bytes).unwrap();
+    let static_secret = StaticSecret::from(secret_bytes);
+
+    let mut pub_key_bytes = [0u8; 32];
+    base64::decode_config_slice(base64_pubkey, base64::STANDARD, &mut pub_key_bytes).unwrap();
+    let pub_key = PublicKey::from(pub_key_bytes);
+
+    static_secret.diffie_hellman(&pub_key).to_bytes()
+}

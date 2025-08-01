@@ -1,5 +1,5 @@
-use chacha20poly1305::{Nonce, ChaCha20Poly1305, KeyInit};
 use chacha20poly1305::aead::Aead;
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use rand::RngCore;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
@@ -65,14 +65,16 @@ impl PeerManager {
 
                 // Create cipher for the peer if we don't have one yet
                 if !runtime_conf.read().await.ciphers.contains_key(&sender_addr) {
-                    if let Some(shared_secret) = runtime_conf.read().await.shared_secrets.get(&sender_pubkey) {
+                    if let Some(shared_secret) =
+                        runtime_conf.read().await.shared_secrets.get(&sender_pubkey)
+                    {
                         let cipher = ChaCha20Poly1305::new(shared_secret.into());
                         runtime_conf
                             .write()
                             .await
                             .ciphers
                             .insert(sender_addr, cipher);
-                        
+
                         #[cfg(debug_assertions)]
                         println!(
                             "[HANDSHAKE] Created cipher for peer {} at endpoint {}",
@@ -85,6 +87,8 @@ impl PeerManager {
                             "[HANDSHAKE] No shared secret found for peer {}",
                             base64::encode(sender_pubkey)
                         );
+                        //Create shared secret if it doesn't exist
+                        let mut runtime_conf = runtime_conf.write().await;
                     }
                 }
 

@@ -1,4 +1,7 @@
-use std::{net::{SocketAddr, IpAddr}, sync::Arc};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use tokio::{
@@ -13,7 +16,7 @@ use tun::AsyncDevice;
 use crate::{
     MAX_UDP_SIZE,
     config::{Config, ConfigUpdateEvent, ConfigUpdateReceiver, RuntimeConfig},
-    crypto::PublicKeyBytes,
+    crypto::{PublicKeyBytes, generate_shared_secret},
     net::{PeerConnections, PeerManager},
     proto::Packet,
 };
@@ -137,9 +140,7 @@ pub async fn udp_listener(
                         ));
                     } else {
                         #[cfg(debug_assertions)]
-                        println!(
-                            "[UDP_LISTENER] Dropping encrypted packet too small: {len} bytes"
-                        );
+                        println!("[UDP_LISTENER] Dropping encrypted packet too small: {len} bytes");
                     }
                 }
                 _ => {
@@ -280,7 +281,9 @@ pub async fn handshake(
         base64::encode(pubkey_bytes)
     );
 
-    let private_ip: IpAddr = config.address.parse()
+    let private_ip: IpAddr = config
+        .address
+        .parse()
         .map_err(|e| crate::Error::Unknown(format!("Invalid private IP in config: {e}")))?;
 
     let handshake_packet = Packet::HandshakeInit {
@@ -318,15 +321,11 @@ pub async fn handshake(
                 let packet_bytes = wire_packet.encode()?;
                 if let Err(e) = sock.send_to(&packet_bytes, endpoint).await {
                     #[cfg(debug_assertions)]
-                    println!(
-                        "[HANDSHAKE] Error sending handshake packet to {endpoint}: {e}"
-                    );
+                    println!("[HANDSHAKE] Error sending handshake packet to {endpoint}: {e}");
                     eprintln!("Error sending handshake packet to {endpoint}: {e}");
                 } else {
                     #[cfg(debug_assertions)]
-                    println!(
-                        "[HANDSHAKE] Successfully sent handshake packet to {endpoint}"
-                    );
+                    println!("[HANDSHAKE] Successfully sent handshake packet to {endpoint}");
                 }
             } else {
                 #[cfg(debug_assertions)]
@@ -414,6 +413,25 @@ pub async fn config_updater(
                         "[CONFIG_UPDATER] No shared secret found for peer {}",
                         base64::encode(pubkey)
                     );
+                    let shared_secret =
+                        generate_shared_secret(&config.secret, &base64::encode(pubkey));
+
+                    #[cfg(debug_assertions)]
+                    println!(
+                        "[CONFIG_UPDATER] Creating cipher for peer {} at endpoint {}",
+                        base64::encode(pubkey),
+                        endpoint
+                    );
+
+                    let cipher = ChaCha20Poly1305::new(&shared_secret.into());
+                    runtime_config
+                        .write()
+                        .await
+                        .ciphers
+                        .insert(endpoint, cipher);
+
+                    #[cfg(debug_assertions)]
+                    println!("[CONFIG_UPDATER] Cipher added to runtime config");
                 }
 
                 #[cfg(debug_assertions)]
