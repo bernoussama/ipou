@@ -357,8 +357,61 @@ pub async fn handle_tun_packet(
                         }
                     }
                 } else {
-                    #[cfg(debug_assertions)]
-                    eprintln!("No cipher found for source IP: {dst_ip}")
+                    // Try to create cipher if we have a shared secret
+                    if let Some(shared_secret) = runtime_conf.read().await.shared_secrets.get(&pub_key) {
+                        #[cfg(debug_assertions)]
+                        println!(
+                            "Creating missing cipher for destination IP: {dst_ip}, Public Key: {}",
+                            base64::encode(pub_key)
+                        );
+                        
+                        let cipher = ChaCha20Poly1305::new(shared_secret.into());
+                        runtime_conf
+                            .write()
+                            .await
+                            .ciphers
+                            .insert(pub_key, cipher.clone());
+                        
+                        // Now retry the encryption
+                        let mut nonce_bytes = [0u8; 12];
+                        rand::rng().fill_bytes(&mut nonce_bytes);
+                        let nonce = Nonce::from_slice(&nonce_bytes);
+                        let data = &buf[..len];
+                        match cipher.encrypt(nonce, data) {
+                            Ok(encrypted) => {
+                                packet.clear();
+                                packet.push(0x10); // Protocol packet type
+                                packet.extend_from_slice(&nonce_bytes); // Include nonce
+                                packet.extend_from_slice(&encrypted);
+                                #[cfg(debug_assertions)]
+                                println!(
+                                    "Sending encrypted packet to {:?}: {} bytes (with new cipher)",
+                                    peer.last_endpoint,
+                                    packet.len()
+                                );
+                                if let Err(e) = etx
+                                    .send((
+                                        packet.clone(),
+                                        peer.last_endpoint.expect("last_endpoint is None"),
+                                    ))
+                                    .await
+                                {
+                                    #[cfg(debug_assertions)]
+                                    eprintln!("Error sending encrypted packet through channel: {e}");
+                                }
+                            }
+                            Err(_e) => {
+                                #[cfg(debug_assertions)]
+                                eprintln!("Error encrypting packet for destination IP: {dst_ip} (with new cipher)");
+                            }
+                        }
+                    } else {
+                        #[cfg(debug_assertions)]
+                        eprintln!(
+                            "No cipher and no shared secret found for destination IP: {dst_ip}, Public Key: {}",
+                            base64::encode(pub_key)
+                        );
+                    }
                 }
             } else {
                 #[cfg(debug_assertions)]
