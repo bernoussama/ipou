@@ -58,7 +58,8 @@ pub enum PeerRole {
 
 pub struct RuntimeConfig {
     pub shared_secrets: HashMap<PublicKeyBytes, [u8; 32]>,
-    pub ciphers: HashMap<SocketAddr, ChaCha20Poly1305>,
+    pub ciphers: HashMap<PublicKeyBytes, ChaCha20Poly1305>,
+    pub current_endpoints: HashMap<PublicKeyBytes, SocketAddr>,
     pub ips: HashMap<SocketAddr, IpAddr>,
     pub ip_to_pubkey: HashMap<IpAddr, PublicKeyBytes>,
 }

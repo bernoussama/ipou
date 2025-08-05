@@ -64,7 +64,7 @@ impl PeerManager {
                     .insert(sender_private_ip, sender_pubkey);
 
                 // Create cipher for the peer if we don't have one yet
-                if !runtime_conf.read().await.ciphers.contains_key(&sender_addr) {
+                if !runtime_conf.read().await.ciphers.contains_key(&sender_pubkey) {
                     if let Some(shared_secret) =
                         runtime_conf.read().await.shared_secrets.get(&sender_pubkey)
                     {
@@ -73,7 +73,7 @@ impl PeerManager {
                             .write()
                             .await
                             .ciphers
-                            .insert(sender_addr, cipher);
+                            .insert(sender_pubkey, cipher);
 
                         #[cfg(debug_assertions)]
                         println!(
@@ -103,12 +103,19 @@ impl PeerManager {
                             .write()
                             .await
                             .ciphers
-                            .insert(sender_addr, cipher);
+                            .insert(sender_pubkey, cipher);
 
                         #[cfg(debug_assertions)]
                         println!("[CONFIG_UPDATER] Cipher added to runtime config");
                     }
                 }
+
+                // Update current endpoint for this peer
+                runtime_conf
+                    .write()
+                    .await
+                    .current_endpoints
+                    .insert(sender_pubkey, sender_addr);
 
                 // Store the association between public key, private IP, and socket address
                 #[cfg(debug_assertions)]
@@ -253,20 +260,32 @@ pub async fn handle_udp_packet(
     let nonce = Nonce::from_slice(&udp_buf[..12]);
     let encrypted_data = &udp_buf[12..len];
 
-    if let Some(cipher) = runtime_conf.read().await.ciphers.get(&peer_addr) {
-        match cipher.decrypt(nonce, encrypted_data) {
-            Ok(decrypted) => {
-                if decrypted.len() >= 20 {
-                    if let Err(e) = dtx.send(decrypted).await {
-                        eprintln!("Error sending decrypted packet through channel: {e}");
+    // Look up the public key for this peer address via private IP
+    let runtime_config = runtime_conf.read().await;
+    let maybe_pubkey = runtime_config
+        .ips
+        .get(&peer_addr)
+        .and_then(|ip| runtime_config.ip_to_pubkey.get(ip))
+        .copied();
+
+    if let Some(pubkey) = maybe_pubkey {
+        if let Some(cipher) = runtime_config.ciphers.get(&pubkey) {
+            match cipher.decrypt(nonce, encrypted_data) {
+                Ok(decrypted) => {
+                    if decrypted.len() >= 20 {
+                        if let Err(e) = dtx.send(decrypted).await {
+                            eprintln!("Error sending decrypted packet through channel: {e}");
+                        }
+                    } else {
+                        eprintln!("Decrypted packet too short: {} bytes", decrypted.len());
                     }
-                } else {
-                    eprintln!("Decrypted packet too short: {} bytes", decrypted.len());
+                }
+                Err(e) => {
+                    eprintln!("Decryption failed for peer {peer_addr:?}: {e}");
                 }
             }
-            Err(e) => {
-                eprintln!("Decryption failed for peer {peer_addr:?}: {e}");
-            }
+        } else {
+            eprintln!("No cipher found for peer pubkey: {}", base64::encode(pubkey));
         }
     } else {
         eprintln!("No cipher found for peer: {peer_addr:?}");
@@ -298,7 +317,7 @@ pub async fn handle_tun_packet(
                     .read()
                     .await
                     .ciphers
-                    .get(&peer.last_endpoint.unwrap())
+                    .get(&pub_key)
                 {
                     #[cfg(debug_assertions)]
                     println!(

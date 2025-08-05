@@ -266,7 +266,7 @@ pub async fn keepalive(remote_addr: SocketAddr, sock: Arc<UdpSocket>) -> crate::
 pub async fn handshake(
     sock: Arc<UdpSocket>,
     config: Arc<Config>,
-    runtime_conf: Arc<RwLock<RuntimeConfig>>,
+    _runtime_conf: Arc<RwLock<RuntimeConfig>>,
     peer_manager: Arc<PeerManager>,
 ) -> crate::Result<()> {
     #[cfg(debug_assertions)]
@@ -403,7 +403,14 @@ pub async fn config_updater(
                         .write()
                         .await
                         .ciphers
-                        .insert(endpoint, cipher);
+                        .insert(pubkey, cipher);
+
+                    // Update current endpoint
+                    runtime_config
+                        .write()
+                        .await
+                        .current_endpoints
+                        .insert(pubkey, endpoint);
 
                     #[cfg(debug_assertions)]
                     println!("[CONFIG_UPDATER] Cipher added to runtime config");
@@ -428,7 +435,14 @@ pub async fn config_updater(
                         .write()
                         .await
                         .ciphers
-                        .insert(endpoint, cipher);
+                        .insert(pubkey, cipher);
+
+                    // Update current endpoint
+                    runtime_config
+                        .write()
+                        .await
+                        .current_endpoints
+                        .insert(pubkey, endpoint);
 
                     #[cfg(debug_assertions)]
                     println!("[CONFIG_UPDATER] Cipher added to runtime config");
@@ -462,7 +476,8 @@ pub async fn config_updater(
                             "[CONFIG_UPDATER] Removing cipher for endpoint {endpoint} from runtime config"
                         );
 
-                        runtime_config.write().await.ciphers.remove(&endpoint);
+                        runtime_config.write().await.ciphers.remove(&pubkey);
+                        runtime_config.write().await.current_endpoints.remove(&pubkey);
                     } else {
                         #[cfg(debug_assertions)]
                         println!("[CONFIG_UPDATER] No last endpoint found for disconnected peer");

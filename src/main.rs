@@ -33,6 +33,7 @@ async fn main() -> Result<()> {
     // Initialize once after config load
     let mut shared_secrets: HashMap<PublicKeyBytes, _> = HashMap::new();
     let mut ciphers = HashMap::new();
+    let mut current_endpoints = HashMap::new();
 
     let mut secret_bytes = [0u8; 32];
     base64::decode_config_slice(&config.secret, base64::STANDARD, &mut secret_bytes).unwrap();
@@ -54,18 +55,23 @@ async fn main() -> Result<()> {
         let shared_secret = static_secret.diffie_hellman(&pub_key);
         let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
         shared_secrets.insert(pub_key_bytes, *shared_secret.as_bytes());
+        ciphers.insert(pub_key_bytes, cipher);
         if let Some(endpoint) = peer_conn.endpoint {
-            ciphers.insert(endpoint, cipher);
+            current_endpoints.insert(pub_key_bytes, endpoint);
         }
 
         for allowed_ip in &peer_conn.allowed_ips {
             if let Ok(ip) = allowed_ip.parse::<IpAddr>() {
-                ips.insert(peer_conn.endpoint.unwrap(), ip);
+                if let Some(endpoint) = peer_conn.endpoint {
+                    ips.insert(endpoint, ip);
+                }
                 ip_to_pubkey.insert(ip, pub_key_bytes);
             } else if allowed_ip.contains("/") {
                 let ip_parts = allowed_ip.split('/').next().unwrap();
                 if let Ok(ip) = ip_parts.parse::<IpAddr>() {
-                    ips.insert(peer_conn.endpoint.unwrap(), ip);
+                    if let Some(endpoint) = peer_conn.endpoint {
+                        ips.insert(endpoint, ip);
+                    }
                     ip_to_pubkey.insert(ip, pub_key_bytes);
                 } else {
                     eprintln!("Invalid IP address format: {allowed_ip}");
@@ -78,21 +84,21 @@ async fn main() -> Result<()> {
         }
 
         // Add peer to peer_manager if it has an endpoint
-        if let Some(endpoint) = peer_conn.endpoint {
+        if peer_conn.endpoint.is_some() {
             let mut peer_connections = peer_manager.peer_connections.write().await;
-            let peer_connection = peer_connections.entry(pub_key_bytes).or_insert(
+            peer_connections.entry(pub_key_bytes).or_insert(
                 trustun::proto::state::PeerConnection::with_update_sender(
                     pub_key_bytes,
                     config_update_tx.clone(),
                 ),
             );
-            // peer_connection.mark_connected(endpoint);
         }
     }
 
     let runtime_config = RuntimeConfig {
         shared_secrets,
         ciphers,
+        current_endpoints,
         ips,
         ip_to_pubkey,
     };
