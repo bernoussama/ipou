@@ -423,6 +423,13 @@ pub async fn config_updater(
                     let shared_secret =
                         generate_shared_secret(&config.secret, &base64::encode(pubkey));
 
+                    // Save shared secret for future use
+                    runtime_config
+                        .write()
+                        .await
+                        .shared_secrets
+                        .insert(pubkey, shared_secret);
+
                     #[cfg(debug_assertions)]
                     println!(
                         "[CONFIG_UPDATER] Creating cipher for peer {} at endpoint {}",

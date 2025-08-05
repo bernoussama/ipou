@@ -91,6 +91,13 @@ impl PeerManager {
                         let shared_secret =
                             generate_shared_secret(&conf.secret, &base64::encode(sender_pubkey));
 
+                        // Save shared secret for future use
+                        runtime_conf
+                            .write()
+                            .await
+                            .shared_secrets
+                            .insert(sender_pubkey, shared_secret);
+
                         #[cfg(debug_assertions)]
                         println!(
                             "[CONFIG_UPDATER] Creating cipher for peer {} at endpoint {}",
