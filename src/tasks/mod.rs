@@ -3,27 +3,29 @@ use std::{
     sync::Arc,
 };
 
+use base64::{engine::general_purpose, Engine as _};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::UdpSocket,
     sync::{
-        RwLock,
         mpsc::{Receiver, Sender},
+        RwLock,
     },
 };
 use tun::AsyncDevice;
 
 use crate::{
-    MAX_UDP_SIZE,
     config::{Config, ConfigUpdateEvent, ConfigUpdateReceiver, RuntimeConfig},
-    crypto::{PublicKeyBytes, generate_shared_secret},
+    crypto::{generate_shared_secret, PublicKeyBytes},
     net::{PeerConnections, PeerManager},
     proto::Packet,
+    MAX_UDP_SIZE,
 };
 
 // Spawned listeners
 pub async fn tun_listener(
-    dev: Arc<AsyncDevice>,
+    mut dev: Arc<AsyncDevice>,
     peer_connections: PeerConnections,
     runtime_conf: Arc<RwLock<RuntimeConfig>>,
     etx: Sender<crate::EncryptedPacket>,
@@ -38,7 +40,7 @@ pub async fn tun_listener(
         println!("[TUN_LISTENER] Waiting for TUN packets...");
 
         // Listen for TUN packets
-        let len = dev.recv(&mut tun_buf).await?;
+        let len = Arc::get_mut(&mut dev).unwrap().read(&mut tun_buf).await?;
 
         #[cfg(debug_assertions)]
         println!("[TUN_LISTENER] Received packet of {len} bytes from TUN");
@@ -160,7 +162,7 @@ pub async fn udp_listener(
 }
 
 pub async fn result_coordinator(
-    dev: Arc<AsyncDevice>,
+    mut dev: Arc<AsyncDevice>,
     sock: Arc<UdpSocket>,
     mut erx: Receiver<crate::EncryptedPacket>,
     mut drx: Receiver<crate::DecryptedPacket>,
@@ -181,7 +183,7 @@ pub async fn result_coordinator(
                        #[cfg(debug_assertions)]
                        println!("[RESULT_COORDINATOR] Received decrypted packet ({} bytes) for TUN", decrypted_packet.len());
 
-                       match dev.send(&decrypted_packet).await {
+                       match Arc::get_mut(&mut dev).unwrap().write(&decrypted_packet).await {
                         Ok(sent) => {
                             #[cfg(debug_assertions)]
                             println!("[RESULT_COORDINATOR] Successfully sent {sent} bytes to TUN dev");
@@ -273,12 +275,14 @@ pub async fn handshake(
     println!("[HANDSHAKE] Starting handshake task...");
 
     let mut pubkey_bytes = [0u8; 32];
-    base64::decode_config_slice(&config.pubkey, base64::STANDARD, &mut pubkey_bytes)?;
+    general_purpose::STANDARD
+        .decode_slice(&config.pubkey, &mut pubkey_bytes)
+        .unwrap();
 
     #[cfg(debug_assertions)]
     println!(
         "[HANDSHAKE] Decoded public key: {}",
-        base64::encode(pubkey_bytes)
+        general_purpose::STANDARD.encode(pubkey_bytes)
     );
 
     let private_ip: IpAddr = config
@@ -385,7 +389,7 @@ pub async fn config_updater(
                 #[cfg(debug_assertions)]
                 println!(
                     "[CONFIG_UPDATER] Processing peer connected event for {}",
-                    base64::encode(pubkey)
+                    general_purpose::STANDARD.encode(pubkey)
                 );
 
                 // Update runtime config with new cipher if needed
@@ -394,7 +398,7 @@ pub async fn config_updater(
                     #[cfg(debug_assertions)]
                     println!(
                         "[CONFIG_UPDATER] Creating cipher for peer {} at endpoint {}",
-                        base64::encode(pubkey),
+                        general_purpose::STANDARD.encode(pubkey),
                         endpoint
                     );
 
@@ -418,26 +422,28 @@ pub async fn config_updater(
                     #[cfg(debug_assertions)]
                     println!(
                         "[CONFIG_UPDATER] No shared secret found for peer {}",
-                        base64::encode(pubkey)
+                        general_purpose::STANDARD.encode(pubkey)
                     );
-                    let shared_secret =
-                        generate_shared_secret(&config.secret, &base64::encode(pubkey));
+                    let shared_secret = generate_shared_secret(
+                        &config.secret,
+                        &general_purpose::STANDARD.encode(pubkey),
+                    );
 
                     // Save shared secret for future use
                     runtime_config
                         .write()
                         .await
                         .shared_secrets
-                        .insert(pubkey, shared_secret);
+                        .insert(pubkey, shared_secret.to_bytes());
 
                     #[cfg(debug_assertions)]
                     println!(
                         "[CONFIG_UPDATER] Creating cipher for peer {} at endpoint {}",
-                        base64::encode(pubkey),
+                        general_purpose::STANDARD.encode(pubkey),
                         endpoint
                     );
 
-                    let cipher = ChaCha20Poly1305::new(&shared_secret.into());
+                    let cipher = ChaCha20Poly1305::new(&shared_secret.to_bytes().into());
                     runtime_config
                         .write()
                         .await
@@ -472,7 +478,7 @@ pub async fn config_updater(
                 #[cfg(debug_assertions)]
                 println!(
                     "[CONFIG_UPDATER] Processing peer disconnected event for {}",
-                    base64::encode(pubkey)
+                    general_purpose::STANDARD.encode(pubkey)
                 );
 
                 // Remove from runtime config
@@ -484,7 +490,11 @@ pub async fn config_updater(
                         );
 
                         runtime_config.write().await.ciphers.remove(&pubkey);
-                        runtime_config.write().await.current_endpoints.remove(&pubkey);
+                        runtime_config
+                            .write()
+                            .await
+                            .current_endpoints
+                            .remove(&pubkey);
                     } else {
                         #[cfg(debug_assertions)]
                         println!("[CONFIG_UPDATER] No last endpoint found for disconnected peer");
@@ -493,7 +503,7 @@ pub async fn config_updater(
                     #[cfg(debug_assertions)]
                     println!(
                         "[CONFIG_UPDATER] Peer connection not found for {}",
-                        base64::encode(pubkey)
+                        general_purpose::STANDARD.encode(pubkey)
                     );
                 }
 
@@ -507,14 +517,16 @@ pub async fn config_updater(
                     eprintln!("Failed to update config file: {e}");
                 } else {
                     #[cfg(debug_assertions)]
-                    println!("[CONFIG_UPDATER] Config file updated successfully for disconnection");
+                    println!(
+                        "[CONFIG_UPDATER] Config file updated successfully for disconnection"
+                    );
                 }
             }
             ConfigUpdateEvent::PeerStateChanged { pubkey, state } => {
                 #[cfg(debug_assertions)]
                 println!(
                     "[CONFIG_UPDATER] Peer {} state changed to {:?}",
-                    base64::encode(pubkey),
+                    general_purpose::STANDARD.encode(pubkey),
                     state
                 );
             }
@@ -535,7 +547,7 @@ async fn update_config_file(
     #[cfg(debug_assertions)]
     println!(
         "[UPDATE_CONFIG_FILE] Starting config file update for peer {}",
-        base64::encode(pubkey)
+        general_purpose::STANDARD.encode(pubkey)
     );
 
     // Read current config
@@ -558,7 +570,7 @@ async fn update_config_file(
     println!("[UPDATE_CONFIG_FILE] Config parsed successfully");
 
     // Find and update the peer
-    let pubkey_str = base64::encode(pubkey);
+    let pubkey_str = general_purpose::STANDARD.encode(pubkey);
 
     #[cfg(debug_assertions)]
     println!("[UPDATE_CONFIG_FILE] Looking for peer {pubkey_str} in config");
@@ -567,7 +579,8 @@ async fn update_config_file(
         #[cfg(debug_assertions)]
         println!(
             "[UPDATE_CONFIG_FILE] Found peer config, updating endpoint from {:?} to {:?}",
-            peer_config.endpoint, endpoint
+            peer_config.endpoint,
+            endpoint
         );
 
         peer_config.endpoint = endpoint;

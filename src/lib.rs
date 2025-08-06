@@ -52,10 +52,8 @@ pub enum Error {
     #[error("TUN device creation failed: {0}")]
     TunDevice(#[from] tun::Error),
 
-    #[error(" bincode decoding error: {0}")]
-    DecodeError(#[from] bincode::error::DecodeError),
-    #[error(" bincode encoding error: {0}")]
-    EncodeError(#[from] bincode::error::EncodeError),
+    #[error(" bincode error: {0}")]
+    Bincode(#[from] Box<bincode::ErrorKind>),
 
     #[error(" invalid packet type error: {0}")]
     InvalidPacketType(u8),

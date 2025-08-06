@@ -1,27 +1,28 @@
+use base64::{engine::general_purpose, Engine as _};
 use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use rand::RngCore;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::{net::SocketAddr, sync::Arc};
-use tokio::sync::RwLock;
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 
-use crate::Error;
 use crate::config::{Config, ConfigUpdateSender, PeerRole, RuntimeConfig};
-use crate::crypto::{PublicKeyBytes, generate_shared_secret};
+use crate::crypto::{generate_shared_secret, PublicKeyBytes};
 use crate::proto::state::PeerConnection;
 use crate::proto::{Packet, PacketType, WirePacket};
+use crate::Error;
 
 pub type PeerConnections = Arc<RwLock<HashMap<PublicKeyBytes, PeerConnection>>>;
 
 pub struct PeerManager {
     pub peer_connections: PeerConnections,
-    pub config_update_tx: ConfigUpdateSender,
+    pub config_update_tx: Arc<ConfigUpdateSender>,
 }
 
 impl PeerManager {
-    pub fn new(config_update_tx: ConfigUpdateSender) -> Self {
+    pub fn new(config_update_tx: Arc<ConfigUpdateSender>) -> Self {
         Self {
             peer_connections: Arc::new(RwLock::new(HashMap::new())),
             config_update_tx,
@@ -43,12 +44,14 @@ impl PeerManager {
                 timestamp,
             } => {
                 let mut peer_connections = self.peer_connections.write().await;
-                let connection = peer_connections.entry(sender_pubkey).or_insert(
-                    PeerConnection::with_update_sender(
-                        sender_pubkey,
-                        self.config_update_tx.clone(),
-                    ),
-                );
+                let connection = peer_connections
+                    .entry(sender_pubkey)
+                    .or_insert_with(|| {
+                        PeerConnection::with_update_sender(
+                            sender_pubkey,
+                            self.config_update_tx.clone(),
+                        )
+                    });
                 connection.mark_connected(sender_addr);
                 connection.last_seen = timestamp;
 
@@ -64,9 +67,17 @@ impl PeerManager {
                     .insert(sender_private_ip, sender_pubkey);
 
                 // Create cipher for the peer if we don't have one yet
-                if !runtime_conf.read().await.ciphers.contains_key(&sender_pubkey) {
-                    if let Some(shared_secret) =
-                        runtime_conf.read().await.shared_secrets.get(&sender_pubkey)
+                if !runtime_conf
+                    .read()
+                    .await
+                    .ciphers
+                    .contains_key(&sender_pubkey)
+                {
+                    if let Some(shared_secret) = runtime_conf
+                        .read()
+                        .await
+                        .shared_secrets
+                        .get(&sender_pubkey)
                     {
                         let cipher = ChaCha20Poly1305::new(shared_secret.into());
                         runtime_conf
@@ -78,34 +89,36 @@ impl PeerManager {
                         #[cfg(debug_assertions)]
                         println!(
                             "[HANDSHAKE] Created cipher for peer {} at endpoint {}",
-                            base64::encode(sender_pubkey),
+                            general_purpose::STANDARD.encode(sender_pubkey),
                             sender_addr
                         );
                     } else {
                         #[cfg(debug_assertions)]
                         eprintln!(
                             "[HANDSHAKE] No shared secret found for peer {}",
-                            base64::encode(sender_pubkey)
+                            general_purpose::STANDARD.encode(sender_pubkey)
                         );
                         //Create shared secret if it doesn't exist
-                        let shared_secret =
-                            generate_shared_secret(&conf.secret, &base64::encode(sender_pubkey));
+                        let shared_secret = generate_shared_secret(
+                            &conf.secret,
+                            &general_purpose::STANDARD.encode(sender_pubkey),
+                        );
 
                         // Save shared secret for future use
                         runtime_conf
                             .write()
                             .await
                             .shared_secrets
-                            .insert(sender_pubkey, shared_secret);
+                            .insert(sender_pubkey, shared_secret.to_bytes());
 
                         #[cfg(debug_assertions)]
                         println!(
                             "[CONFIG_UPDATER] Creating cipher for peer {} at endpoint {}",
-                            base64::encode(sender_pubkey),
+                            general_purpose::STANDARD.encode(sender_pubkey),
                             sender_addr
                         );
 
-                        let cipher = ChaCha20Poly1305::new(&shared_secret.into());
+                        let cipher = ChaCha20Poly1305::new(&shared_secret.to_bytes().into());
                         runtime_conf
                             .write()
                             .await
@@ -128,7 +141,7 @@ impl PeerManager {
                 #[cfg(debug_assertions)]
                 println!(
                     "[HANDSHAKE] Associated peer {} (private IP: {}) with socket: {}",
-                    base64::encode(sender_pubkey),
+                    general_purpose::STANDARD.encode(sender_pubkey),
                     sender_private_ip,
                     sender_addr
                 );
@@ -185,7 +198,10 @@ impl PeerManager {
                         },
                     })
                 } else {
-                    eprintln!("Peer {} not found!", base64::encode(target_pubkey));
+                    eprintln!(
+                        "Peer {} not found!",
+                        general_purpose::STANDARD.encode(target_pubkey)
+                    );
                     Some(WirePacket {
                         packet_type: PacketType::PeerInfo,
                         payload: Packet::PeerInfo {
@@ -204,7 +220,7 @@ impl PeerManager {
                 #[cfg(debug_assertions)]
                 println!(
                     "Received PeerInfo for {}: {:?}, last seen: {}",
-                    base64::encode(pubkey),
+                    general_purpose::STANDARD.encode(pubkey),
                     endpoint,
                     last_seen
                 );
@@ -292,7 +308,10 @@ pub async fn handle_udp_packet(
                 }
             }
         } else {
-            eprintln!("No cipher found for peer pubkey: {}", base64::encode(pubkey));
+            eprintln!(
+                "No cipher found for peer pubkey: {}",
+                general_purpose::STANDARD.encode(pubkey)
+            );
         }
     } else {
         eprintln!("No cipher found for peer: {peer_addr:?}");
@@ -312,27 +331,22 @@ pub async fn handle_tun_packet(
             #[cfg(debug_assertions)]
             println!(
                 "Destination IP: {dst_ip}, Public Key: {}",
-                base64::encode(pub_key)
+                general_purpose::STANDARD.encode(pub_key)
             );
             if let Some(peer) = peer_connections.read().await.get(&pub_key) {
                 #[cfg(debug_assertions)]
                 println!(
                     "Found peer connection for destination IP: {dst_ip}, Public Key: {}",
-                    base64::encode(pub_key)
+                    general_purpose::STANDARD.encode(pub_key)
                 );
-                if let Some(cipher) = runtime_conf
-                    .read()
-                    .await
-                    .ciphers
-                    .get(&pub_key)
-                {
+                if let Some(cipher) = runtime_conf.read().await.ciphers.get(&pub_key) {
                     #[cfg(debug_assertions)]
                     println!(
                         "Using cipher for destination IP: {dst_ip}, Public Key: {}",
-                        base64::encode(pub_key)
+                        general_purpose::STANDARD.encode(pub_key)
                     );
                     let mut nonce_bytes = [0u8; 12];
-                    rand::rng().fill_bytes(&mut nonce_bytes);
+                    rand::thread_rng().fill_bytes(&mut nonce_bytes);
                     let nonce = Nonce::from_slice(&nonce_bytes);
                     let data = &buf[..len];
                     match cipher.encrypt(nonce, data) {
@@ -365,23 +379,28 @@ pub async fn handle_tun_packet(
                     }
                 } else {
                     // Try to create cipher if we have a shared secret
-                    if let Some(shared_secret) = runtime_conf.read().await.shared_secrets.get(&pub_key) {
+                    if let Some(shared_secret) = runtime_conf
+                        .read()
+                        .await
+                        .shared_secrets
+                        .get(&pub_key)
+                    {
                         #[cfg(debug_assertions)]
                         println!(
                             "Creating missing cipher for destination IP: {dst_ip}, Public Key: {}",
-                            base64::encode(pub_key)
+                            general_purpose::STANDARD.encode(pub_key)
                         );
-                        
+
                         let cipher = ChaCha20Poly1305::new(shared_secret.into());
                         runtime_conf
                             .write()
                             .await
                             .ciphers
                             .insert(pub_key, cipher.clone());
-                        
+
                         // Now retry the encryption
                         let mut nonce_bytes = [0u8; 12];
-                        rand::rng().fill_bytes(&mut nonce_bytes);
+                        rand::thread_rng().fill_bytes(&mut nonce_bytes);
                         let nonce = Nonce::from_slice(&nonce_bytes);
                         let data = &buf[..len];
                         match cipher.encrypt(nonce, data) {
@@ -404,7 +423,9 @@ pub async fn handle_tun_packet(
                                     .await
                                 {
                                     #[cfg(debug_assertions)]
-                                    eprintln!("Error sending encrypted packet through channel: {e}");
+                                    eprintln!(
+                                        "Error sending encrypted packet through channel: {e}"
+                                    );
                                 }
                             }
                             Err(_e) => {
@@ -416,7 +437,7 @@ pub async fn handle_tun_packet(
                         #[cfg(debug_assertions)]
                         eprintln!(
                             "No cipher and no shared secret found for destination IP: {dst_ip}, Public Key: {}",
-                            base64::encode(pub_key)
+                            general_purpose::STANDARD.encode(pub_key)
                         );
                     }
                 }
@@ -424,7 +445,7 @@ pub async fn handle_tun_packet(
                 #[cfg(debug_assertions)]
                 eprintln!(
                     "No peer connection found for destination IP: {dst_ip}, Public Key: {}",
-                    base64::encode(pub_key)
+                    general_purpose::STANDARD.encode(pub_key)
                 );
             }
         } else {
@@ -462,7 +483,11 @@ fn extract_dst_ip(packet: &[u8]) -> Option<IpAddr> {
     #[cfg(debug_assertions)]
     eprintln!(
         "IP version: {}, first bytes: {:02x} {:02x} {:02x} {:02x}",
-        version, packet[0], packet[1], packet[2], packet[3]
+        version,
+        packet[0],
+        packet[1],
+        packet[2],
+        packet[3]
     );
 
     if version == 4 {
