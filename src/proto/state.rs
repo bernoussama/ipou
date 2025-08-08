@@ -1,4 +1,10 @@
-use std::net::SocketAddr;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+};
+
+use chacha20poly1305::ChaCha20Poly1305;
+use tokio::sync::RwLock;
 
 use crate::{
     config::{ConfigUpdateEvent, ConfigUpdateSender},
@@ -16,21 +22,23 @@ pub enum PeerState {
 }
 
 #[derive(Debug)]
-pub struct PeerConnection {
+pub struct Peer {
     pub pubkey: PublicKeyBytes,
     pub state: PeerState,
     pub last_endpoint: Option<SocketAddr>,
+    pub private_ip: Option<IpAddr>, // Added from RuntimeConfig
     pub last_seen: Timestamp,
     pub failed_attempts: u16,
     config_update_tx: Option<ConfigUpdateSender>, // Add this field
 }
 
-impl PeerConnection {
+impl Peer {
     pub fn new(pubkey: PublicKeyBytes) -> Self {
         Self {
             pubkey,
             state: PeerState::Unknown,
             last_endpoint: None,
+            private_ip: None,
             last_seen: 0,
             failed_attempts: 0,
             config_update_tx: None,
@@ -41,6 +49,7 @@ impl PeerConnection {
             pubkey,
             state: PeerState::Unknown,
             last_endpoint: None,
+            private_ip: None,
             last_seen: 0,
             failed_attempts: 0,
             config_update_tx: Some(tx),
@@ -54,9 +63,10 @@ impl PeerConnection {
         println!("Peer {} is now connecting", base64::encode(self.pubkey));
     }
 
-    pub fn mark_connected(&mut self, endpoint: SocketAddr) {
+    pub fn mark_connected(&mut self, endpoint: SocketAddr, private_ip: IpAddr) {
         self.state = PeerState::Connected;
         self.last_endpoint = Some(endpoint);
+        self.private_ip = Some(private_ip);
         self.last_seen = proto::now();
         self.failed_attempts = 0;
 
@@ -116,4 +126,22 @@ impl PeerConnection {
     pub fn is_stale(&self) -> bool {
         matches!(self.state, PeerState::Stale)
     }
+}
+
+pub struct VpnState {
+    // This holds all peers, keyed by their public key.
+    pub peers: RwLock<HashMap<PublicKeyBytes, Peer>>,
+
+    // This maps private IPs to ciphers.
+    pub ciphers: RwLock<HashMap<IpAddr, ChaCha20Poly1305>>,
+
+    // This maps private IPs to public keys for quick lookup.
+    pub ip_to_pubkey: RwLock<HashMap<IpAddr, PublicKeyBytes>>,
+
+    // This maps public endpoints to public keys for incoming packets.
+    pub endpoint_to_pubkey: RwLock<HashMap<SocketAddr, PublicKeyBytes>>,
+
+    // Shared secrets are still needed to generate ciphers.
+    // They are derived from the config, so they can be pre-calculated.
+    pub shared_secrets: HashMap<PublicKeyBytes, [u8; 32]>,
 }

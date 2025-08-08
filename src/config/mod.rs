@@ -1,9 +1,7 @@
 use std::{
-    collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
-use chacha20poly1305::ChaCha20Poly1305;
 use serde::{Deserialize, Serialize};
 
 use crate::{crypto::PublicKeyBytes, proto::state::PeerState};
@@ -54,13 +52,6 @@ pub struct Config {
 pub enum PeerRole {
     Anchor,  // Can accept incoming connections
     Dynamic, // Connects to anchors
-}
-
-pub struct RuntimeConfig {
-    pub shared_secrets: HashMap<PublicKeyBytes, [u8; 32]>,
-    pub ciphers: HashMap<SocketAddr, ChaCha20Poly1305>,
-    pub ips: HashMap<SocketAddr, IpAddr>,
-    pub ip_to_pubkey: HashMap<IpAddr, PublicKeyBytes>,
 }
 
 pub fn load_config(config_path: &str) -> Config {

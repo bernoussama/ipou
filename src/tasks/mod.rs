@@ -6,26 +6,22 @@ use std::{
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use tokio::{
     net::UdpSocket,
-    sync::{
-        RwLock,
-        mpsc::{Receiver, Sender},
-    },
+    sync::mpsc::{Receiver, Sender},
 };
 use tun::AsyncDevice;
 
 use crate::{
+    config::{Config, ConfigUpdateEvent, ConfigUpdateReceiver},
+    crypto::{generate_shared_secret, PublicKeyBytes},
+    net,
+    proto::{state::VpnState, Packet},
     MAX_UDP_SIZE,
-    config::{Config, ConfigUpdateEvent, ConfigUpdateReceiver, RuntimeConfig},
-    crypto::{PublicKeyBytes, generate_shared_secret},
-    net::{PeerConnections, PeerManager},
-    proto::Packet,
 };
 
 // Spawned listeners
 pub async fn tun_listener(
     dev: Arc<AsyncDevice>,
-    peer_connections: PeerConnections,
-    runtime_conf: Arc<RwLock<RuntimeConfig>>,
+    state: Arc<VpnState>,
     etx: Sender<crate::EncryptedPacket>,
 ) -> crate::Result<()> {
     #[cfg(debug_assertions)]
@@ -48,11 +44,10 @@ pub async fn tun_listener(
             #[cfg(debug_assertions)]
             println!("[TUN_LISTENER] Spawning handler for valid packet (>= 20 bytes)");
 
-            tokio::spawn(crate::net::handle_tun_packet(
+            tokio::spawn(net::handle_tun_packet(
                 tun_buf,
                 len,
-                Arc::clone(&peer_connections),
-                Arc::clone(&runtime_conf),
+                Arc::clone(&state),
                 etx.clone(),
             ));
         } else {
@@ -66,8 +61,7 @@ pub async fn tun_listener(
 pub async fn udp_listener(
     sock: Arc<UdpSocket>,
     conf: Arc<Config>,
-    runtime_conf: Arc<RwLock<RuntimeConfig>>,
-    peer_manager: Arc<PeerManager>,
+    state: Arc<VpnState>,
     dtx: Sender<crate::DecryptedPacket>,
     etx: Sender<crate::EncryptedPacket>,
 ) -> crate::Result<()> {
@@ -105,15 +99,14 @@ pub async fn udp_listener(
                         println!(
                             "[UDP_LISTENER] Received protocol packet from {peer_addr}: {packet:?}"
                         );
-                        Arc::clone(&peer_manager)
-                            .handle_proto_packet(
-                                Arc::clone(&conf),
-                                Arc::clone(&runtime_conf),
-                                packet,
-                                peer_addr,
-                                etx.clone(),
-                            )
-                            .await?;
+                        net::handle_proto_packet(
+                            Arc::clone(&conf),
+                            Arc::clone(&state),
+                            packet,
+                            peer_addr,
+                            etx.clone(),
+                        )
+                        .await?;
                     } else {
                         #[cfg(debug_assertions)]
                         println!(
@@ -131,11 +124,11 @@ pub async fn udp_listener(
                             "[UDP_LISTENER] Received encrypted packet from {peer_addr} ({len} bytes)"
                         );
                         // 12 bytes nonce + 16 bytes auth tag
-                        tokio::spawn(crate::net::handle_udp_packet(
-                            udp_buf[1..len].try_into().unwrap(), // skip first byte
-                            len - 1,
+                        let packet_data = udp_buf[1..len].to_vec();
+                        tokio::spawn(net::handle_udp_packet(
+                            packet_data,
                             peer_addr,
-                            Arc::clone(&runtime_conf),
+                            Arc::clone(&state),
                             dtx.clone(),
                         ));
                     } else {
@@ -266,8 +259,7 @@ pub async fn keepalive(remote_addr: SocketAddr, sock: Arc<UdpSocket>) -> crate::
 pub async fn handshake(
     sock: Arc<UdpSocket>,
     config: Arc<Config>,
-    runtime_conf: Arc<RwLock<RuntimeConfig>>,
-    peer_manager: Arc<PeerManager>,
+    state: Arc<VpnState>,
 ) -> crate::Result<()> {
     #[cfg(debug_assertions)]
     println!("[HANDSHAKE] Starting handshake task...");
@@ -340,8 +332,8 @@ pub async fn handshake(
         #[cfg(debug_assertions)]
         println!("[HANDSHAKE] Checking connection status of all peers...");
 
-        let all_connected = peer_manager
-            .peer_connections
+        let all_connected = state
+            .peers
             .read()
             .await
             .values()
@@ -369,9 +361,8 @@ pub async fn handshake(
 pub async fn config_updater(
     mut update_rx: ConfigUpdateReceiver,
     config: Arc<Config>,
-    runtime_config: Arc<RwLock<RuntimeConfig>>,
+    state: Arc<VpnState>,
     config_path: String,
-    peer_manager: Arc<PeerManager>,
 ) -> crate::Result<()> {
     #[cfg(debug_assertions)]
     println!("[CONFIG_UPDATER] Starting config updater task");
@@ -389,49 +380,34 @@ pub async fn config_updater(
                 );
 
                 // Update runtime config with new cipher if needed
-                if let Some(shared_secret) = runtime_config.read().await.shared_secrets.get(&pubkey)
-                {
-                    #[cfg(debug_assertions)]
-                    println!(
-                        "[CONFIG_UPDATER] Creating cipher for peer {} at endpoint {}",
-                        base64::encode(pubkey),
-                        endpoint
-                    );
+                if let Some(peer) = state.peers.read().await.get(&pubkey) {
+                    if let Some(private_ip) = peer.private_ip {
+                        if state.ciphers.read().await.contains_key(&private_ip) {
+                            continue;
+                        }
 
-                    let cipher = ChaCha20Poly1305::new(shared_secret.into());
-                    runtime_config
-                        .write()
-                        .await
-                        .ciphers
-                        .insert(endpoint, cipher);
-
-                    #[cfg(debug_assertions)]
-                    println!("[CONFIG_UPDATER] Cipher added to runtime config");
-                } else {
-                    #[cfg(debug_assertions)]
-                    println!(
-                        "[CONFIG_UPDATER] No shared secret found for peer {}",
-                        base64::encode(pubkey)
-                    );
-                    let shared_secret =
-                        generate_shared_secret(&config.secret, &base64::encode(pubkey));
-
-                    #[cfg(debug_assertions)]
-                    println!(
-                        "[CONFIG_UPDATER] Creating cipher for peer {} at endpoint {}",
-                        base64::encode(pubkey),
-                        endpoint
-                    );
-
-                    let cipher = ChaCha20Poly1305::new(&shared_secret.into());
-                    runtime_config
-                        .write()
-                        .await
-                        .ciphers
-                        .insert(endpoint, cipher);
-
-                    #[cfg(debug_assertions)]
-                    println!("[CONFIG_UPDATER] Cipher added to runtime config");
+                        if let Some(shared_secret) = state.shared_secrets.get(&pubkey) {
+                            #[cfg(debug_assertions)]
+                            println!(
+                                "[CONFIG_UPDATER] Creating cipher for peer {} at endpoint {}",
+                                base64::encode(pubkey),
+                                endpoint
+                            );
+                            let cipher = ChaCha20Poly1305::new(shared_secret.into());
+                            state.ciphers.write().await.insert(private_ip, cipher);
+                            println!("[CONFIG_UPDATER] Cipher added to runtime config");
+                        } else {
+                            println!(
+                                "[CONFIG_UPDATER] No shared secret found for peer {}",
+                                base64::encode(pubkey)
+                            );
+                            let shared_secret =
+                                generate_shared_secret(&config.secret, &base64::encode(pubkey));
+                            let cipher = ChaCha20Poly1305::new(&shared_secret.into());
+                            state.ciphers.write().await.insert(private_ip, cipher);
+                            println!("[CONFIG_UPDATER] Cipher added to runtime config");
+                        }
+                    }
                 }
 
                 #[cfg(debug_assertions)]
@@ -455,14 +431,14 @@ pub async fn config_updater(
                 );
 
                 // Remove from runtime config
-                if let Some(peer) = peer_manager.peer_connections.read().await.get(&pubkey) {
-                    if let Some(endpoint) = peer.last_endpoint {
+                if let Some(peer) = state.peers.read().await.get(&pubkey) {
+                    if let Some(private_ip) = peer.private_ip {
                         #[cfg(debug_assertions)]
                         println!(
-                            "[CONFIG_UPDATER] Removing cipher for endpoint {endpoint} from runtime config"
+                            "[CONFIG_UPDATER] Removing cipher for private ip {private_ip} from runtime config"
                         );
 
-                        runtime_config.write().await.ciphers.remove(&endpoint);
+                        state.ciphers.write().await.remove(&private_ip);
                     } else {
                         #[cfg(debug_assertions)]
                         println!("[CONFIG_UPDATER] No last endpoint found for disconnected peer");

@@ -1,17 +1,18 @@
-use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
-use trustun::cli::commands::{handle_gen_key, handle_pub_key};
-use trustun::config::{PeerRole, RuntimeConfig};
-use trustun::crypto::PublicKeyBytes;
-use std::net::IpAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
-use std::{collections::HashMap, net::Ipv4Addr};
 
 use clap::Parser;
+use tokio::net::UdpSocket;
+use tokio::sync::{mpsc, RwLock};
+use x25519_dalek::{PublicKey, StaticSecret};
+
+use trustun::cli::commands::{handle_gen_key, handle_pub_key};
+use trustun::config::PeerRole;
+use trustun::crypto::PublicKeyBytes;
+use trustun::proto::state::{Peer, VpnState};
 use trustun::tasks;
 use trustun::{Error, Result};
-use tokio::net::UdpSocket;
-use tokio::sync::{RwLock, mpsc};
-use x25519_dalek::{PublicKey, StaticSecret};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,88 +30,56 @@ async fn main() -> Result<()> {
     let conf = trustun::config::load_config(config_path);
     let config = Arc::new(conf);
 
-    let config_clone = Arc::clone(&config);
-    // Initialize once after config load
+    // Initialize VpnState
     let mut shared_secrets: HashMap<PublicKeyBytes, _> = HashMap::new();
-    let mut ciphers = HashMap::new();
-
     let mut secret_bytes = [0u8; 32];
     base64::decode_config_slice(&config.secret, base64::STANDARD, &mut secret_bytes).unwrap();
     let static_secret = StaticSecret::from(secret_bytes);
 
-    let mut ips = HashMap::new();
-
-    let mut ip_to_pubkey = HashMap::new();
-
-    // Create peer manager
+    let mut peers: HashMap<PublicKeyBytes, Peer> = HashMap::new();
     let (config_update_tx, config_update_rx) = mpsc::unbounded_channel();
-    let peer_manager = Arc::new(trustun::net::PeerManager::new(config_update_tx.clone()));
 
-    for peer_conn in &config.peers {
+    for peer_config in &config.peers {
         let mut pub_key_bytes = [0u8; 32];
-        base64::decode_config_slice(&peer_conn.pub_key, base64::STANDARD, &mut pub_key_bytes)
+        base64::decode_config_slice(&peer_config.pub_key, base64::STANDARD, &mut pub_key_bytes)
             .unwrap();
         let pub_key = PublicKey::from(pub_key_bytes);
         let shared_secret = static_secret.diffie_hellman(&pub_key);
-        let cipher = ChaCha20Poly1305::new(shared_secret.as_bytes().into());
         shared_secrets.insert(pub_key_bytes, *shared_secret.as_bytes());
-        if let Some(endpoint) = peer_conn.endpoint {
-            ciphers.insert(endpoint, cipher);
-        }
 
-        for allowed_ip in &peer_conn.allowed_ips {
-            if let Ok(ip) = allowed_ip.parse::<IpAddr>() {
-                ips.insert(peer_conn.endpoint.unwrap(), ip);
-                ip_to_pubkey.insert(ip, pub_key_bytes);
-            } else if allowed_ip.contains("/") {
-                let ip_parts = allowed_ip.split('/').next().unwrap();
-                if let Ok(ip) = ip_parts.parse::<IpAddr>() {
-                    ips.insert(peer_conn.endpoint.unwrap(), ip);
-                    ip_to_pubkey.insert(ip, pub_key_bytes);
-                } else {
-                    eprintln!("Invalid IP address format: {allowed_ip}");
-                    continue;
-                }
-            } else {
-                eprintln!("Invalid IP address format: {allowed_ip}");
-                continue;
+        let mut peer = Peer::with_update_sender(pub_key_bytes, config_update_tx.clone());
+        if let Some(endpoint) = peer_config.endpoint {
+            if let Ok(ip) = peer_config.allowed_ips[0].parse::<IpAddr>() {
+                peer.mark_connected(endpoint, ip);
             }
         }
-
-        // Add peer to peer_manager if it has an endpoint
-        if let Some(endpoint) = peer_conn.endpoint {
-            let mut peer_connections = peer_manager.peer_connections.write().await;
-            let peer_connection = peer_connections.entry(pub_key_bytes).or_insert(
-                trustun::proto::state::PeerConnection::with_update_sender(
-                    pub_key_bytes,
-                    config_update_tx.clone(),
-                ),
-            );
-            // peer_connection.mark_connected(endpoint);
-        }
+        peers.insert(pub_key_bytes, peer);
     }
 
-    let runtime_config = RuntimeConfig {
+    let state = Arc::new(VpnState {
+        peers: RwLock::new(peers),
+        ciphers: RwLock::new(HashMap::new()),
+        ip_to_pubkey: RwLock::new(HashMap::new()),
+        endpoint_to_pubkey: RwLock::new(HashMap::new()),
         shared_secrets,
-        ciphers,
-        ips,
-        ip_to_pubkey,
-    };
-
-    let locked_runtime_conf = Arc::new(RwLock::new(runtime_config));
+    });
 
     let mut tun_config = tun::Configuration::default();
     tun_config
-        .tun_name(&config_clone.name)
-        .address(config_clone.address.parse::<Ipv4Addr>().unwrap())
+        .tun_name(&config.name)
+        .address(config.address.parse::<Ipv4Addr>().unwrap())
         .netmask((255, 255, 255, 0))
         .mtu(trustun::MTU as u16)
         .up();
 
     let dev = tun::create_as_async(&tun_config).expect("Failed to create TUN device");
-    let sock = UdpSocket::bind(Arc::clone(&config).endpoint.ok_or(Error::Unknown(
-        "endpoint must be configured in config.yaml".to_string(),
-    ))?)
+    let sock = UdpSocket::bind(
+        config
+            .endpoint
+            .ok_or(Error::Unknown(
+                "endpoint must be configured in config.yaml".to_string(),
+            ))?,
+    )
     .await
     .expect("Failed to bind UDP socket");
     println!(
@@ -128,16 +97,14 @@ async fn main() -> Result<()> {
     let mut tasks = Vec::new();
     let tun_listener = tokio::spawn(tasks::tun_listener(
         Arc::clone(&dev_arc),
-        Arc::clone(&peer_manager.peer_connections),
-        Arc::clone(&locked_runtime_conf),
+        Arc::clone(&state),
         etx.clone(),
     ));
     tasks.push(tun_listener);
     let udp_listener = tokio::spawn(tasks::udp_listener(
         Arc::clone(&sock_arc),
-        Arc::clone(&config_clone),
-        Arc::clone(&locked_runtime_conf),
-        Arc::clone(&peer_manager),
+        Arc::clone(&config),
+        Arc::clone(&state),
         dtx.clone(),
         etx.clone(),
     ));
@@ -154,22 +121,20 @@ async fn main() -> Result<()> {
     let config_updater_handle = tokio::spawn(crate::tasks::config_updater(
         config_update_rx,
         Arc::clone(&config),
-        Arc::clone(&locked_runtime_conf),
+        Arc::clone(&state),
         config_path.to_string(),
-        Arc::clone(&peer_manager),
     ));
     tasks.push(config_updater_handle);
 
     // if peer is dynamic, spawn keepalive task
-    if config_clone.role == PeerRole::Dynamic {
+    if config.role == PeerRole::Dynamic {
         let handshake_task = tokio::spawn(tasks::handshake(
             Arc::clone(&sock_arc),
-            Arc::clone(&config_clone),
-            Arc::clone(&locked_runtime_conf),
-            Arc::clone(&peer_manager),
+            Arc::clone(&config),
+            Arc::clone(&state),
         ));
         tasks.push(handshake_task);
-        let anchor_addr = config_clone
+        let anchor_addr = config
             .peers
             .iter()
             .find(|p| p.is_anchor)
