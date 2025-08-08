@@ -1,0 +1,16 @@
+name: utun0
+address: '10.0.0.1'
+port: 1194
+secret: CaVgWN9K/MSGel/f8Q72PRvw9lIXfZL7JtajrZJc3fw=
+pubkey: cOS8GQeObk2tfe3Q8X+1+M3CCR9+wMpfH4KnevqU8iI=
+peers:
+  '10.0.0.2':
+    sock_addr: '192.68.100.141:1194'
+    pub_key: hqB6wNMNLMBOi6WztR7FKD/aZpZxqL+jQ8hAz2gz5ws=
+  '10.0.0.3':
+    sock_addr: '192.68.100.154:1194'
+    pub_key: fsRfbqnwaOLzoi563p97mOxcG6sSW1zuTwp5S+Z+DGA=
+  '10.0.0.4':
+    sock_addr: '192.168.1.200:1194'
+    pub_key: 09DUUxG4BseueulRy9hlSVWHxs1AmZOx62c+JOa6TFg=
+

@@ -1,5 +1,5 @@
 [package]
-name = "opentun"
+name = "trustun"
 version = "0.1.0"
 edition = "2024"
 
@@ -18,3 +18,5 @@ serde_yml = "0.0.12"
 chacha20poly1305 = "0.10.1"
 rand = "0.9.1"
 thiserror = "2.0.12"
+bincode = "2.0.1"
+futures = "0.3.31"
